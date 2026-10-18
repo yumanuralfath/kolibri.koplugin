@@ -16,7 +16,7 @@
 		visible: boolean;
 		highlights: Highlight[];
 	};
-	type Library = { books: Book[]; published: boolean; publishId?: string; syncToken?: string };
+	type Library = { books: Book[]; published: boolean; publishId?: string };
 	type Cover = { title: string; author: string; url: string };
 
 	let library = $state<Library>({ books: [], published: false });
@@ -25,7 +25,11 @@
 	let loading = $state(true);
 	let password = $state('');
 	let passwordConfirm = $state('');
+	let currentAdminPassword = $state('');
+	let newAdminPassword = $state('');
+	let newAdminPasswordConfirm = $state('');
 	let errorMessage = $state('');
+	let successMessage = $state('');
 	let coverDrafts = $state<Record<string, string>>({});
 	let coverResults = $state<Record<string, Cover[]>>({});
 	let pending = $state('');
@@ -100,7 +104,6 @@
 		visible?: boolean;
 		coverUrl?: string | null;
 		published?: boolean;
-		rotateSyncToken?: boolean;
 	}) {
 		pending = patch.bookId ?? 'publish';
 		try {
@@ -118,13 +121,28 @@
 		}
 	}
 
-	async function copySyncToken() {
-		if (!library.syncToken) return;
-		try {
-			await navigator.clipboard.writeText(library.syncToken);
-		} catch {
-			errorMessage = 'Tidak bisa menyalin token. Pilih dan salin token secara manual.';
+	async function changeAdminPassword(event: SubmitEvent) {
+		event.preventDefault();
+		errorMessage = '';
+		successMessage = '';
+		if (newAdminPassword !== newAdminPasswordConfirm) {
+			errorMessage = 'Password baru dan konfirmasi tidak sama.';
+			return;
 		}
+		const response = await fetch('/api/auth', {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ currentPassword: currentAdminPassword, newPassword: newAdminPassword })
+		});
+		const result = await response.json();
+		if (!response.ok) {
+			errorMessage = result.error ?? 'Password tidak berhasil diganti.';
+			return;
+		}
+		currentAdminPassword = '';
+		newAdminPassword = '';
+		newAdminPasswordConfirm = '';
+		successMessage = 'Password berhasil diganti. Gunakan password baru di KOReader.';
 	}
 
 	async function findCovers(book: Book) {
@@ -222,18 +240,49 @@
 			<div class="topbar-right">
 				<span class="connection"><i></i> KOReader connected</span>
 				<details class="sync-settings">
-					<summary>KOReader setup</summary>
+					<summary>Account & sync</summary>
 					<div class="sync-popover">
-						<strong>Sync token</strong>
-						<p>Paste this token into the Kolibri plugin in KOReader.</p>
-						<code>{library.syncToken}</code>
-						<div>
-							<button class="small-button" onclick={copySyncToken}>Copy token</button><button
-								class="small-button"
-								onclick={() => save({ rotateSyncToken: true })}>Generate new token</button
+						<strong>KOReader uses your admin password</strong>
+						<p>
+							Enter the same password in the Kolibri plugin. Server URL: <code
+								>{typeof window !== 'undefined' ? window.location.origin : ''}</code
 							>
-						</div>
-						<small>Generating a new token disconnects any device using the old one.</small>
+						</p>
+						<form class="password-change" onsubmit={changeAdminPassword}>
+							<label for="current-admin-password">Current password</label>
+							<input
+								id="current-admin-password"
+								type="password"
+								bind:value={currentAdminPassword}
+								autocomplete="current-password"
+								required
+							/>
+							<label for="new-admin-password">New password</label>
+							<input
+								id="new-admin-password"
+								type="password"
+								bind:value={newAdminPassword}
+								autocomplete="new-password"
+								minlength="12"
+								required
+							/>
+							<label for="new-admin-password-confirm">Confirm new password</label>
+							<input
+								id="new-admin-password-confirm"
+								type="password"
+								bind:value={newAdminPasswordConfirm}
+								autocomplete="new-password"
+								minlength="12"
+								required
+							/>
+							{#if errorMessage}<p class="form-error">{errorMessage}</p>{/if}
+							{#if successMessage}<p class="form-success">{successMessage}</p>{/if}
+							<button class="small-button" type="submit">Change password</button>
+						</form>
+						<small
+							>Use HTTPS when syncing outside a trusted local network. Automatic sync runs when a
+							book opens and periodically while reading.</small
+						>
 					</div>
 				</details>
 				<button class="text-button" onclick={logout}>Lock library <span>↗</span></button>

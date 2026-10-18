@@ -16,10 +16,10 @@ local SETTINGS = {
         title = _("Kolibri server URL"),
         hint = "http://192.168.1.10:5173",
     },
-    sync_token = {
-        key = "kolibri_sync_token",
-        title = _("Kolibri sync token"),
-        hint = _("Paste the KOLIBRI_SYNC_TOKEN value"),
+    password = {
+        key = "kolibri_password",
+        title = _("Kolibri admin password"),
+        hint = _("Enter the same password used to sign in to Kolibri"),
     },
 }
 
@@ -54,8 +54,10 @@ end
 
 function Kolibri:init()
     self.server_url = G_reader_settings:readSetting("kolibri_server_url") or ""
-    self.sync_token = G_reader_settings:readSetting("kolibri_sync_token") or ""
+    self.password = G_reader_settings:readSetting("kolibri_password") or ""
     self.last_sync = 0
+    self.last_attempt = 0
+    self.sync_pending = false
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
@@ -82,8 +84,8 @@ function Kolibri:editSetting(key, title, hint)
                     G_reader_settings:saveSetting(key, value)
                     if key == SETTINGS.server_url.key then
                         self.server_url = value
-                    elseif key == SETTINGS.sync_token.key then
-                        self.sync_token = value
+                    elseif key == SETTINGS.password.key then
+                        self.password = value
                     end
                     UIManager:close(dialog)
                     UIManager:show(InfoMessage:new { text = _(title .. " saved.") })
@@ -117,9 +119,9 @@ function Kolibri:addToMainMenu(menu_items)
                 callback = function() self:editSettingByName("server_url") end,
             },
             {
-                text = _("Set sync token"),
+                text = _("Set Kolibri password"),
                 keep_menu_open = true,
-                callback = function() self:editSettingByName("sync_token") end,
+                callback = function() self:editSettingByName("password") end,
             },
         },
     }
@@ -147,17 +149,10 @@ function Kolibri:getHighlights()
     return highlights
 end
 
-function Kolibri:syncBook(force)
+function Kolibri:getBookPayload()
     if not self.ui or not self.ui.document then
-        return
+        return nil
     end
-    if self.server_url == "" or self.sync_token == "" then
-        if force then
-            UIManager:show(InfoMessage:new { text = _("Set the Kolibri server URL and sync token first.") })
-        end
-        return
-    end
-
     local document = self.ui.document
     local props = document:getProps() or {}
     local filename = asString(props.file or document.file)
@@ -171,7 +166,7 @@ function Kolibri:syncBook(force)
     book_id = book_id:gsub("[^%w_%-]", "_")
 
     local rapidjson = require("rapidjson")
-    local payload = rapidjson.encode({
+    return rapidjson.encode({
         book = {
             id = book_id,
             title = title,
@@ -183,7 +178,9 @@ function Kolibri:syncBook(force)
         },
         highlights = self:getHighlights(),
     })
+end
 
+function Kolibri:postPayload(payload)
     local endpoint = self.server_url:gsub("/+$", "") .. "/api/sync"
     local ltn12 = require("ltn12")
     local response_body = {}
@@ -193,7 +190,7 @@ function Kolibri:syncBook(force)
         headers = {
             ["Content-Type"] = "application/json",
             ["Content-Length"] = tostring(#payload),
-            ["Authorization"] = "Bearer " .. self.sync_token,
+            ["Authorization"] = "Bearer " .. self.password,
         },
         source = ltn12.source.string(payload),
         sink = ltn12.sink.table(response_body),
@@ -206,29 +203,75 @@ function Kolibri:syncBook(force)
         http = require("socket.http")
     end
     http.TIMEOUT = 8
-    local _, code, response_headers = http.request(request)
+    local _, code, response_headers, status = http.request(request)
     if tonumber(code) and tonumber(code) >= 200 and tonumber(code) < 300 then
         self.last_sync = os.time()
+        return true
+    end
+    return false, status or response_headers or code or _("network unavailable")
+end
+
+function Kolibri:syncBook(force, network_reconnected)
+    if not self.ui or not self.ui.document then return end
+    if self.server_url == "" or self.password == "" then
         if force then
-            UIManager:show(InfoMessage:new { text = _("Kolibri sync complete.") })
+            UIManager:show(InfoMessage:new { text = _("Set the Kolibri server URL and admin password first.") })
         end
-    elseif force then
-        local detail = response_headers and tostring(code) or _("network unavailable")
-        UIManager:show(InfoMessage:new { text = _("Kolibri sync failed: ") .. detail })
+        return
+    end
+    if self.sync_pending or (not force and not network_reconnected and os.time() - self.last_attempt < 300) then return end
+
+    local payload = self:getBookPayload()
+    if not payload then return end
+    self.last_attempt = os.time()
+    self.sync_pending = true
+
+    local function sendWhenOnline()
+        local ok, sent, detail = pcall(function()
+            return self:postPayload(payload)
+        end)
+        self.sync_pending = false
+        if force then
+            local message
+            if ok and sent then
+                message = _("Kolibri sync complete.")
+            else
+                message = _("Kolibri sync failed: ") .. tostring(ok and detail or sent)
+            end
+            UIManager:show(InfoMessage:new { text = message })
+        end
+    end
+
+    local ok, NetworkMgr = pcall(require, "ui/network/manager")
+    if ok and NetworkMgr and NetworkMgr.runWhenOnline then
+        local scheduled = pcall(function()
+            NetworkMgr:runWhenOnline(sendWhenOnline)
+        end)
+        if not scheduled then
+            self.sync_pending = false
+            if force then
+                UIManager:show(InfoMessage:new { text = _("Could not start the Kolibri network request.") })
+            end
+        end
+    else
+        sendWhenOnline()
     end
 end
 
 function Kolibri:onReaderReady()
     if self.ui and self.ui.registerEventListener then
         self.ui:registerEventListener("PageUpdate", self)
+        self.ui:registerEventListener("NetworkConnected", self)
     end
     self:syncBook(false)
 end
 
 function Kolibri:onPageUpdate()
-    if os.time() - self.last_sync >= 300 then
-        self:syncBook(false)
-    end
+    self:syncBook(false)
+end
+
+function Kolibri:onNetworkConnected()
+    self:syncBook(false, true)
 end
 
 return Kolibri

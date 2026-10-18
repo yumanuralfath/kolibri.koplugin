@@ -3,6 +3,7 @@ import {
 	createSession,
 	isAuthenticated,
 	isSetupRequired,
+	changePassword,
 	setupAdmin,
 	verifyPassword
 } from '../../../lib/server/auth';
@@ -45,4 +46,27 @@ export const POST: RequestHandler = async ({ request, cookies, url }) => {
 export const DELETE: RequestHandler = ({ cookies }) => {
 	cookies.delete('kolibri_session', { path: '/' });
 	return json({ authenticated: false });
+};
+
+export const PATCH: RequestHandler = async ({ request, cookies, url }) => {
+	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	const body = (await request.json().catch(() => null)) as {
+		currentPassword?: string;
+		newPassword?: string;
+	} | null;
+	if (!body?.currentPassword || !verifyPassword(body.currentPassword)) {
+		return json({ error: 'Password saat ini tidak cocok.' }, { status: 401 });
+	}
+	if (!body.newPassword || body.newPassword.length < 12) {
+		return json({ error: 'Password baru harus berisi minimal 12 karakter.' }, { status: 400 });
+	}
+	changePassword(body.newPassword);
+	cookies.set('kolibri_session', createSession(), {
+		httpOnly: true,
+		secure: url.protocol === 'https:',
+		sameSite: 'strict',
+		path: '/',
+		maxAge: 60 * 60 * 24 * 14
+	});
+	return json({ changed: true });
 };

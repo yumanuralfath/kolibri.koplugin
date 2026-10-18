@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { getSetting, setInitialSettings, setSetting } from './database';
+import { getSetting, setInitialSettings, setSettings } from './database';
 
 const cookieName = 'kolibri_session';
 const sessionLifetime = 60 * 60 * 24 * 14;
@@ -14,16 +14,14 @@ export function isSetupRequired(): boolean {
 	return !getSetting('passwordHash') || !getSetting('passwordSalt');
 }
 
-export function setupAdmin(password: string): string {
+export function setupAdmin(password: string): void {
 	if (!isSetupRequired()) throw new Error('Kolibri is already configured.');
 	const salt = randomBytes(16).toString('hex');
 	const passwordHash = scryptSync(password, salt, 64).toString('hex');
 	const sessionSecret = randomBytes(32).toString('base64url');
-	const syncToken = randomBytes(32).toString('base64url');
-	if (!setInitialSettings({ passwordSalt: salt, passwordHash, sessionSecret, syncToken })) {
+	if (!setInitialSettings({ passwordSalt: salt, passwordHash, sessionSecret })) {
 		throw new Error('Kolibri is already configured.');
 	}
-	return syncToken;
 }
 
 export function verifyPassword(password: string): boolean {
@@ -59,18 +57,17 @@ export function isAuthenticated(request: Request): boolean {
 	return equal(signature, sign(`${expires}.${nonce}`));
 }
 
-export function getSyncToken(): string {
-	return getSetting('syncToken') ?? '';
+export function changePassword(password: string): void {
+	const salt = randomBytes(16).toString('hex');
+	const passwordHash = scryptSync(password, salt, 64).toString('hex');
+	setSettings({
+		passwordSalt: salt,
+		passwordHash,
+		sessionSecret: randomBytes(32).toString('base64url')
+	});
 }
 
-export function rotateSyncToken(): string {
-	const token = randomBytes(32).toString('base64url');
-	setSetting('syncToken', token);
-	return token;
-}
-
-export function hasSyncToken(request: Request): boolean {
-	const expected = getSyncToken();
+export function hasSyncPassword(request: Request): boolean {
 	const received = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-	return Boolean(expected && received && equal(received, expected));
+	return Boolean(received && verifyPassword(received));
 }

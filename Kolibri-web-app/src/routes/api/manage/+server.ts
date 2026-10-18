@@ -1,12 +1,12 @@
 import { json } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
-import { getSyncToken, isAuthenticated, rotateSyncToken } from '../../../lib/server/auth';
+import { isAuthenticated } from '../../../lib/server/auth';
 import { readLibrary, updateLibrary } from '../../../lib/server/library';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
 	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
-	return json({ ...readLibrary(), syncToken: getSyncToken() });
+	return json(readLibrary());
 };
 
 export const PATCH: RequestHandler = async ({ request }) => {
@@ -16,7 +16,6 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		visible?: boolean;
 		coverUrl?: string | null;
 		published?: boolean;
-		rotateSyncToken?: boolean;
 	} | null;
 	if (!body) return json({ error: 'Invalid request.' }, { status: 400 });
 	const library = updateLibrary((data) => {
@@ -34,6 +33,5 @@ export const PATCH: RequestHandler = async ({ request }) => {
 			}
 		}
 	});
-	const syncToken = body.rotateSyncToken ? rotateSyncToken() : getSyncToken();
-	return json({ ...library, syncToken });
+	return json(library);
 };

@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { hasSyncToken } from '../../../lib/server/auth';
+import { hasSyncPassword } from '../../../lib/server/auth';
 import { updateLibrary, type Book, type Highlight } from '../../../lib/server/library';
 import type { RequestHandler } from './$types';
 
@@ -22,7 +22,7 @@ function cleanHighlights(value: unknown): Highlight[] {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	if (!hasSyncToken(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!hasSyncPassword(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const payload = (await request.json().catch(() => null)) as SyncPayload | null;
 	const source = payload?.book;
 	const id = String(source?.id ?? '')
