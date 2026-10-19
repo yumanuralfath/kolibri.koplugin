@@ -2,19 +2,32 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import ReadingAnalytics from '../lib/components/ReadingAnalytics.svelte';
+	import ThemeToggle from '../lib/components/ThemeToggle.svelte';
+	import { formatDateTime, formatDateOnly, formatDuration, getReadingDaysCount } from '../lib/utils';
 
-	type Highlight = { text: string; note?: string; page?: number; createdAt?: string };
+	type Highlight = {
+		id: string;
+		text: string;
+		note?: string;
+		page?: number;
+		createdAt?: string;
+		visible: boolean;
+	};
 	type Book = {
 		id: string;
 		title: string;
 		authors: string[];
+		series?: string;
+		language?: string;
 		totalPages: number;
 		currentPage: number;
 		progress: number;
 		totalReadPages?: number;
 		totalReadTime?: number;
 		status: 'reading' | 'finished' | 'paused';
+		startedAt?: string;
 		lastReadAt: string;
+		finishedAt?: string;
 		coverUrl?: string;
 		visible: boolean;
 		highlights: Highlight[];
@@ -50,9 +63,7 @@
 	let coverResults = $state<Record<string, Cover[]>>({});
 	let pending = $state('');
 	let publicUrl = $derived(
-		library.publishId && typeof window !== 'undefined'
-			? `${window.location.origin}${resolve('/p/[id]', { id: library.publishId })}`
-			: ''
+		library.published && typeof window !== 'undefined' ? `${window.location.origin}/public` : ''
 	);
 	let readingBooks = $derived(library.books.filter((book) => book.status === 'reading'));
 	let finishedBooks = $derived(library.books.filter((book) => book.status === 'finished'));
@@ -63,12 +74,152 @@
 	let pagesRead = $derived(
 		library.books.reduce((total, book) => total + (book.totalReadPages ?? book.currentPage), 0)
 	);
-	let latestHighlights = $derived(
-		library.books
-			.flatMap((book) => book.highlights.map((highlight) => ({ ...highlight, title: book.title })))
-			.slice(-5)
-			.reverse()
+
+	// Book Detail Modal State
+	let selectedBookId = $state<string | null>(null);
+	let selectedBook = $derived(library.books.find((b) => b.id === selectedBookId) ?? null);
+	let bookModalHighlightPage = $state(1);
+	const bookHighlightsPerPage = 4;
+
+	// Highlight Inline Editing State
+	let editingHighlightId = $state<string | null>(null);
+	let editHighlightText = $state('');
+	let editHighlightNote = $state('');
+
+	// Collected Thoughts (In the Margins) State & Pagination
+	let marginBookFilter = $state<string>('all');
+	let marginVisibilityFilter = $state<'all' | 'public' | 'private'>('all');
+	let marginSearchQuery = $state('');
+	let marginHighlightPage = $state(1);
+	const marginHighlightsPerPage = 5;
+
+	type DisplayHighlight = Highlight & {
+		bookId: string;
+		bookTitle: string;
+		bookAuthor: string;
+	};
+
+	let allFlatHighlights = $derived<DisplayHighlight[]>(
+		library.books.flatMap((book) =>
+			(book.highlights ?? []).map((h) => ({
+				...h,
+				bookId: book.id,
+				bookTitle: book.title,
+				bookAuthor: book.authors[0] ?? ''
+			}))
+		)
 	);
+
+	let filteredMarginHighlights = $derived.by(() => {
+		let list = allFlatHighlights;
+
+		if (marginBookFilter !== 'all') {
+			list = list.filter((h) => h.bookId === marginBookFilter);
+		}
+
+		if (marginVisibilityFilter === 'public') {
+			list = list.filter((h) => h.visible !== false);
+		} else if (marginVisibilityFilter === 'private') {
+			list = list.filter((h) => h.visible === false);
+		}
+
+		const query = marginSearchQuery.trim().toLowerCase();
+		if (query) {
+			list = list.filter(
+				(h) =>
+					h.text.toLowerCase().includes(query) ||
+					(h.note && h.note.toLowerCase().includes(query)) ||
+					h.bookTitle.toLowerCase().includes(query)
+			);
+		}
+
+		return list.sort((a, b) => {
+			const da = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+			const db = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+			return db - da;
+		});
+	});
+
+	let totalMarginPages = $derived(
+		Math.max(1, Math.ceil(filteredMarginHighlights.length / marginHighlightsPerPage))
+	);
+	let activeMarginPage = $derived(Math.min(marginHighlightPage, totalMarginPages));
+
+	let paginatedMarginHighlights = $derived(
+		filteredMarginHighlights.slice(
+			(activeMarginPage - 1) * marginHighlightsPerPage,
+			activeMarginPage * marginHighlightsPerPage
+		)
+	);
+
+	let bookModalHighlights = $derived(selectedBook?.highlights ?? []);
+	let totalBookModalHighlightPages = $derived(
+		Math.max(1, Math.ceil(bookModalHighlights.length / bookHighlightsPerPage))
+	);
+	let activeBookModalHighlightPage = $derived(
+		Math.min(bookModalHighlightPage, totalBookModalHighlightPages)
+	);
+	let paginatedBookModalHighlights = $derived(
+		bookModalHighlights.slice(
+			(activeBookModalHighlightPage - 1) * bookHighlightsPerPage,
+			activeBookModalHighlightPage * bookHighlightsPerPage
+		)
+	);
+
+	type ShelfFilter = 'all' | 'reading' | 'finished' | 'paused';
+	let shelfFilter = $state<ShelfFilter>('all');
+	let shelfSearch = $state('');
+	let shelfSortBy = $state<'progress-desc' | 'recent' | 'title' | 'progress-asc'>('progress-desc');
+	let shelfPage = $state(1);
+	const booksPerPage = 6;
+
+	let processedBooks = $derived.by(() => {
+		let books = [...library.books];
+
+		if (shelfFilter !== 'all') {
+			books = books.filter((b) => b.status === shelfFilter);
+		}
+
+		const query = shelfSearch.trim().toLowerCase();
+		if (query) {
+			books = books.filter(
+				(b) =>
+					b.title.toLowerCase().includes(query) ||
+					b.authors.some((author) => author.toLowerCase().includes(query))
+			);
+		}
+
+		if (shelfSortBy === 'progress-desc') {
+			books.sort(
+				(a, b) =>
+					(b.progress ?? 0) - (a.progress ?? 0) ||
+					new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime()
+			);
+		} else if (shelfSortBy === 'progress-asc') {
+			books.sort(
+				(a, b) =>
+					(a.progress ?? 0) - (b.progress ?? 0) ||
+					new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime()
+			);
+		} else if (shelfSortBy === 'recent') {
+			books.sort((a, b) => new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime());
+		} else if (shelfSortBy === 'title') {
+			books.sort((a, b) => a.title.localeCompare(b.title));
+		}
+
+		return books;
+	});
+
+	let totalShelfPages = $derived(Math.max(1, Math.ceil(processedBooks.length / booksPerPage)));
+	let activeShelfPage = $derived(Math.min(shelfPage, totalShelfPages));
+
+	let paginatedBooks = $derived(
+		processedBooks.slice((activeShelfPage - 1) * booksPerPage, activeShelfPage * booksPerPage)
+	);
+
+	function goToShelfPage(page: number) {
+		shelfPage = Math.max(1, Math.min(page, totalShelfPages));
+	}
 
 	async function loadLibrary() {
 		const response = await fetch('/api/manage');
@@ -139,6 +290,81 @@
 		}
 	}
 
+	async function updateHighlight(
+		bookId: string,
+		highlightId: string,
+		patch: { visible?: boolean; note?: string; text?: string }
+	) {
+		pending = `hl-${highlightId}`;
+		errorMessage = '';
+		try {
+			const response = await fetch('/api/manage', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					bookId,
+					highlightId,
+					highlight: patch
+				})
+			});
+			if (!response.ok) throw new Error('Gagal memperbarui catatan.');
+			library = await response.json();
+			if (editingHighlightId === highlightId) {
+				editingHighlightId = null;
+			}
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan.';
+		} finally {
+			pending = '';
+		}
+	}
+
+	async function setAllBookHighlightsVisible(bookId: string, visible: boolean) {
+		pending = `all-hl-${bookId}`;
+		errorMessage = '';
+		try {
+			const response = await fetch('/api/manage', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					bookId,
+					setAllHighlightsVisible: visible
+				})
+			});
+			if (!response.ok) throw new Error('Gagal memperbarui catatan.');
+			library = await response.json();
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan.';
+		} finally {
+			pending = '';
+		}
+	}
+
+	async function deleteHighlight(bookId: string, highlightId: string) {
+		if (!confirm('Hapus catatan ini?')) return;
+		pending = `del-hl-${highlightId}`;
+		errorMessage = '';
+		try {
+			const response = await fetch('/api/manage', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					bookId,
+					deleteHighlightId: highlightId
+				})
+			});
+			if (!response.ok) throw new Error('Gagal menghapus catatan.');
+			library = await response.json();
+			if (editingHighlightId === highlightId) {
+				editingHighlightId = null;
+			}
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan.';
+		} finally {
+			pending = '';
+		}
+	}
+
 	async function changeAdminPassword(event: SubmitEvent) {
 		event.preventDefault();
 		errorMessage = '';
@@ -173,6 +399,31 @@
 				errorMessage = 'Sampul tidak ditemukan. Coba judul lain atau isi URL manual.';
 		} catch {
 			errorMessage = 'Pencarian sampul gagal. Periksa koneksi internet.';
+		} finally {
+			pending = '';
+		}
+	}
+
+	async function fetchBulkCovers() {
+		pending = 'bulk-covers';
+		errorMessage = '';
+		successMessage = '';
+		try {
+			const response = await fetch('/api/covers', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ overwriteAll: false })
+			});
+			const result = await response.json();
+			if (!response.ok) {
+				throw new Error(result.error ?? 'Gagal mengambil sampul.');
+			}
+			if (result.library) {
+				library = result.library;
+			}
+			successMessage = `Berhasil mendapatkan ${result.updatedCount} sampul buku otomatis!`;
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Gagal memperbarui sampul.';
 		} finally {
 			pending = '';
 		}
@@ -256,6 +507,7 @@
 				><span class="brand-mark">K</span><span>kolibri</span></a
 			>
 			<div class="topbar-right">
+				<ThemeToggle />
 				<span class="connection"><i></i> KOReader connected</span>
 				<details class="sync-settings">
 					<summary>Account & sync</summary>
@@ -334,15 +586,21 @@
 			</section>
 			{#if library.published && publicUrl}
 				<div class="publish-link">
-					<span>PUBLIC LINK</span><a
-						href={resolve('/p/[id]', { id: library.publishId ?? '' })}
-						target="_blank"
-						rel="noreferrer">{publicUrl}</a
+					<span>PUBLIC LINK</span><a href={resolve('/public')} target="_blank" rel="noreferrer"
+						>{publicUrl}</a
 					><button onclick={() => navigator.clipboard.writeText(publicUrl)}>Copy link</button>
 				</div>
 			{/if}
 			{#if errorMessage}<p class="inline-error">
 					{errorMessage}<button aria-label="Dismiss" onclick={() => (errorMessage = '')}>×</button>
+				</p>{/if}
+			{#if successMessage}<p
+					class="inline-error"
+					style="background: rgba(59, 107, 83, 0.15); border-color: var(--green); color: var(--green);"
+				>
+					{successMessage}<button aria-label="Dismiss" onclick={() => (successMessage = '')}
+						>×</button
+					>
 				</p>{/if}
 
 			<section class="stat-grid" aria-label="Reading statistics">
@@ -380,7 +638,20 @@
 							<p class="eyebrow">THE COLLECTION</p>
 							<h2>Your bookshelf <span>{library.books.length}</span></h2>
 						</div>
-						<span class="shelf-total">{pausedBooks.length} on pause</span>
+						<div style="display: flex; align-items: center; gap: 10px;">
+							<button
+								type="button"
+								class="small-button"
+								disabled={pending === 'bulk-covers'}
+								onclick={fetchBulkCovers}
+								title="Cari sampul untuk semua buku secara otomatis"
+							>
+								{pending === 'bulk-covers'
+									? '⏳ Mencari sampul...'
+									: '📚 Dapatkan Semua Sampul Otomatis'}
+							</button>
+							<span class="shelf-total">{pausedBooks.length} on pause</span>
+						</div>
 					</div>
 					{#if library.books.length === 0}
 						<div class="empty-shelf">
@@ -392,95 +663,225 @@
 							</p>
 						</div>
 					{:else}
-						<div class="book-list">
-							{#each library.books as book (book.id)}
-								<article class="book-row">
-									<div class="cover-frame">
-										{#if book.coverUrl}<img
-												src={book.coverUrl}
-												alt="Cover of {book.title}"
-											/>{:else}<div class="cover-placeholder">
-												<span>{book.title.split(/\s+/).slice(0, 3).join(' ')}</span><i
-													>{book.authors[0] ?? 'KOReader'}</i
-												>
-											</div>{/if}
-									</div>
-									<div class="book-info">
-										<div class="book-title-line">
-											<h3>{book.title}</h3>
-											<span class="status-dot status-dot--{book.status}"></span>
-										</div>
-										<p class="book-author">{book.authors.join(', ') || 'Unknown author'}</p>
-										<div class="progress-line">
-											<div class="progress-track">
-												<span style={`width: ${book.progress}%`}></span>
-											</div>
-											<span>{book.progress}%</span>
-										</div>
-										<div class="book-meta">
-											<span
-												>{book.status === 'finished'
-													? 'Finished'
-													: book.status === 'paused'
-														? 'On pause'
-														: 'Reading'}</span
-											><span
-												>{book.currentPage.toLocaleString()}{book.totalPages
-													? ` / ${book.totalPages.toLocaleString()} pages`
-													: ' pages'}</span
-											><span>{book.highlights.length} notes</span>
-											{#if book.totalReadTime}<span>{Math.round(book.totalReadTime / 60)} min</span
-												>{/if}
-										</div>
-										<details class="cover-editor">
-											<summary>Change cover</summary>
-											<div class="cover-tools">
-												<button
-													class="small-button"
-													disabled={pending === `cover-${book.id}`}
-													onclick={() => findCovers(book)}
-													>{pending === `cover-${book.id}`
-														? 'Searching…'
-														: 'Find automatically'}</button
-												>
-												<div class="manual-cover">
-													<input
-														aria-label={`Cover image URL for ${book.title}`}
-														placeholder="https:// image URL"
-														bind:value={coverDrafts[book.id]}
-													/><button
-														class="small-button"
-														onclick={() =>
-															save({ bookId: book.id, coverUrl: coverDrafts[book.id] || null })}
-														>Save URL</button
-													>
-												</div>
-												{#if coverResults[book.id]?.length}<div class="cover-options">
-														{#each coverResults[book.id] as cover (cover.url)}<button
-																class="cover-option"
-																title={`${cover.title} — ${cover.author}`}
-																onclick={() => {
-																	coverDrafts[book.id] = cover.url;
-																	save({ bookId: book.id, coverUrl: cover.url });
-																	coverResults[book.id] = [];
-																}}><img src={cover.url} alt="" /><span>{cover.title}</span></button
-															>{/each}
-													</div>{/if}
-											</div>
-										</details>
-									</div>
+						<div class="shelf-toolbar">
+							<div class="shelf-toolbar-left">
+								<div class="shelf-filter-group" role="tablist">
 									<button
-										class:visible={book.visible}
-										class="visibility-button"
-										title={book.visible ? 'Shown on public shelf' : 'Hidden from public shelf'}
-										aria-label={`${book.visible ? 'Hide' : 'Show'} ${book.title} on public shelf`}
-										aria-pressed={book.visible}
-										onclick={() => save({ bookId: book.id, visible: !book.visible })}
-										><span>{book.visible ? '◉' : '○'}</span></button
+										type="button"
+										class="shelf-filter-btn"
+										class:active={shelfFilter === 'all'}
+										onclick={() => { shelfFilter = 'all'; shelfPage = 1; }}
 									>
-								</article>
-							{/each}
+										Semua ({library.books.length})
+									</button>
+									<button
+										type="button"
+										class="shelf-filter-btn"
+										class:active={shelfFilter === 'reading'}
+										onclick={() => { shelfFilter = 'reading'; shelfPage = 1; }}
+									>
+										Sedang Dibaca ({readingBooks.length})
+									</button>
+									<button
+										type="button"
+										class="shelf-filter-btn"
+										class:active={shelfFilter === 'finished'}
+										onclick={() => { shelfFilter = 'finished'; shelfPage = 1; }}
+									>
+										Selesai ({finishedBooks.length})
+									</button>
+									{#if pausedBooks.length > 0}
+										<button
+											type="button"
+											class="shelf-filter-btn"
+											class:active={shelfFilter === 'paused'}
+											onclick={() => { shelfFilter = 'paused'; shelfPage = 1; }}
+										>
+											Dijeda ({pausedBooks.length})
+										</button>
+									{/if}
+								</div>
+							</div>
+							<div class="shelf-toolbar-right">
+								<div class="shelf-search">
+									<input
+										type="search"
+										placeholder="Cari buku atau penulis..."
+										bind:value={shelfSearch}
+										oninput={() => { shelfPage = 1; }}
+										aria-label="Cari buku"
+									/>
+								</div>
+								<select
+									class="shelf-sort-select"
+									bind:value={shelfSortBy}
+									onchange={() => { shelfPage = 1; }}
+									aria-label="Urutkan rak buku"
+								>
+									<option value="progress-desc">📊 Persen Tertinggi (Default)</option>
+									<option value="recent">⏱ Terakhir Dibaca</option>
+									<option value="title">🔤 Judul (A-Z)</option>
+									<option value="progress-asc">📉 Persen Terendah</option>
+								</select>
+							</div>
 						</div>
+
+						{#if processedBooks.length === 0}
+							<div class="empty-shelf" style="min-height: 180px;">
+								<div class="empty-icon">🔍</div>
+								<h3>Tidak ada buku yang cocok.</h3>
+								<p>Coba sesuaikan filter status atau kata kunci pencarian Anda.</p>
+							</div>
+						{:else}
+							<div class="book-list">
+								{#each paginatedBooks as book (book.id)}
+									<!-- svelte-ignore a11y_click_events_have_key_events -->
+									<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+									<article
+										class="book-row book-row-clickable"
+										onclick={() => { selectedBookId = book.id; bookModalHighlightPage = 1; }}
+										role="button"
+										tabindex="0"
+										aria-label="Buka detail membaca untuk {book.title}"
+									>
+										<div class="cover-frame">
+											{#if book.coverUrl}<img
+													src={book.coverUrl}
+													alt="Cover of {book.title}"
+												/>{:else}<div class="cover-placeholder">
+													<span>{book.title.split(/\s+/).slice(0, 3).join(' ')}</span><i
+														>{book.authors[0] ?? 'KOReader'}</i
+													>
+												</div>{/if}
+										</div>
+										<div class="book-info">
+											<div class="book-title-line">
+												<h3>{book.title}</h3>
+												<div style="display: flex; align-items: center; gap: 8px;">
+													<span
+														style="font-size: 10px; font-family: var(--mono); color: var(--green); background: var(--paper-featured); padding: 2px 6px; border-radius: 3px; border: 1px solid var(--line);"
+														title="Klik untuk melihat statistik detail membaca"
+													>
+														Statistik ↗
+													</span>
+													<span class="status-dot status-dot--{book.status}"></span>
+												</div>
+											</div>
+											<p class="book-author">{book.authors.join(', ') || 'Unknown author'}</p>
+											<div class="progress-line">
+												<div class="progress-track">
+													<span style={`width: ${book.progress}%`}></span>
+												</div>
+												<span>{book.progress}%</span>
+											</div>
+											<div class="book-meta">
+												<span
+													>{book.status === 'finished'
+														? 'Finished'
+														: book.status === 'paused'
+															? 'On pause'
+															: 'Reading'}</span
+												><span
+													>{book.currentPage.toLocaleString()}{book.totalPages
+														? ` / ${book.totalPages.toLocaleString()} pages`
+														: ' pages'}</span
+												><span>{book.highlights.length} notes</span>
+												{#if book.totalReadTime}<span>{Math.round(book.totalReadTime / 60)} min</span
+													>{/if}
+											</div>
+											<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+											<details class="cover-editor" onclick={(e) => e.stopPropagation()}>
+												<summary>Change cover</summary>
+												<div class="cover-tools">
+													<button
+														class="small-button"
+														disabled={pending === `cover-${book.id}`}
+														onclick={() => findCovers(book)}
+														>{pending === `cover-${book.id}`
+															? 'Searching…'
+															: 'Find automatically'}</button
+													>
+													<div class="manual-cover">
+														<input
+															aria-label={`Cover image URL for ${book.title}`}
+															placeholder="https:// image URL"
+															bind:value={coverDrafts[book.id]}
+														/><button
+															class="small-button"
+															onclick={() =>
+																save({ bookId: book.id, coverUrl: coverDrafts[book.id] || null })}
+															>Save URL</button
+														>
+													</div>
+													{#if coverResults[book.id]?.length}<div class="cover-options">
+															{#each coverResults[book.id] as cover (cover.url)}<button
+																	class="cover-option"
+																	title={`${cover.title} — ${cover.author}`}
+																	onclick={() => {
+																		coverDrafts[book.id] = cover.url;
+																		save({ bookId: book.id, coverUrl: cover.url });
+																		coverResults[book.id] = [];
+																	}}><img src={cover.url} alt="" /><span>{cover.title}</span></button
+																>{/each}
+														</div>{/if}
+												</div>
+											</details>
+										</div>
+										<button
+											class:visible={book.visible}
+											class="visibility-button"
+											title={book.visible ? 'Shown on public shelf' : 'Hidden from public shelf'}
+											aria-label={`${book.visible ? 'Hide' : 'Show'} ${book.title} on public shelf`}
+											aria-pressed={book.visible}
+											onclick={(e) => { e.stopPropagation(); save({ bookId: book.id, visible: !book.visible }); }}
+											><span>{book.visible ? '◉' : '○'}</span></button
+										>
+									</article>
+								{/each}
+							</div>
+
+							{#if totalShelfPages > 1}
+								<div class="shelf-pagination">
+									<span>
+										Menampilkan {(activeShelfPage - 1) * booksPerPage + 1} - {Math.min(activeShelfPage * booksPerPage, processedBooks.length)} dari {processedBooks.length} buku
+									</span>
+									<div class="pagination-controls">
+										<button
+											type="button"
+											class="pagination-btn"
+											disabled={activeShelfPage <= 1}
+											onclick={() => goToShelfPage(activeShelfPage - 1)}
+											title="Halaman sebelumnya"
+										>
+											‹
+										</button>
+										{#each Array.from({ length: totalShelfPages }, (_, i) => i + 1) as pageNum}
+											{#if totalShelfPages <= 7 || Math.abs(pageNum - activeShelfPage) <= 1 || pageNum === 1 || pageNum === totalShelfPages}
+												<button
+													type="button"
+													class="pagination-btn"
+													class:active={pageNum === activeShelfPage}
+													onclick={() => goToShelfPage(pageNum)}
+												>
+													{pageNum}
+												</button>
+											{:else if pageNum === 2 || pageNum === totalShelfPages - 1}
+												<span style="padding: 0 4px; color: var(--muted);">…</span>
+											{/if}
+										{/each}
+										<button
+											type="button"
+											class="pagination-btn"
+											disabled={activeShelfPage >= totalShelfPages}
+											onclick={() => goToShelfPage(activeShelfPage + 1)}
+											title="Halaman berikutnya"
+										>
+											›
+										</button>
+									</div>
+								</div>
+							{/if}
+						{/if}
 					{/if}
 					<div class="shelf-foot">
 						<span>RECENTLY OPENED</span><span
@@ -499,25 +900,117 @@
 						</div>
 						<span class="note-count">{highlights.toString().padStart(2, '0')}</span>
 					</div>
-					{#if latestHighlights.length}
+
+					<!-- Filter per book, filter visibility, search -->
+					<div class="notes-controls">
+						<select
+							class="notes-book-select"
+							bind:value={marginBookFilter}
+							onchange={() => (marginHighlightPage = 1)}
+							aria-label="Filter kutipan per buku"
+						>
+							<option value="all">📚 Semua Buku ({allFlatHighlights.length})</option>
+							{#each library.books.filter((b) => b.highlights && b.highlights.length > 0) as b}
+								<option value={b.id}>{b.title} ({b.highlights.length})</option>
+							{/each}
+						</select>
+
+						<div class="notes-filter-row">
+							<select
+								class="notes-book-select"
+								style="width: 45%;"
+								bind:value={marginVisibilityFilter}
+								onchange={() => (marginHighlightPage = 1)}
+								aria-label="Filter visibilitas"
+							>
+								<option value="all">Semua Status</option>
+								<option value="public">◉ Publik Saja</option>
+								<option value="private">○ Privat Saja</option>
+							</select>
+							<input
+								type="search"
+								class="notes-search-input"
+								placeholder="Cari kutipan..."
+								bind:value={marginSearchQuery}
+								oninput={() => (marginHighlightPage = 1)}
+								aria-label="Cari catatan"
+							/>
+						</div>
+					</div>
+
+					{#if filteredMarginHighlights.length}
 						<div class="quote-list">
-							{#each latestHighlights as note, index (note.title + note.text + index)}<blockquote
-									class="quote-item"
-								>
+							{#each paginatedMarginHighlights as note, index (note.bookId + note.id + index)}
+								<blockquote class="quote-item">
 									<span class="quote-mark">“</span>
 									<p>{note.text}</p>
+									{#if note.note}
+										<p style="font-size: 11px; color: var(--muted); margin-top: -6px; margin-bottom: 8px;">
+											<i>Catatan: {note.note}</i>
+										</p>
+									{/if}
 									<footer>
-										<span>{note.title}</span><span
-											>{note.page ? `P. ${note.page}` : `0${index + 1}`}</span
+										<button
+											type="button"
+											class="text-button"
+											style="text-align: left; padding: 0; font-size: 11px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+											onclick={() => { selectedBookId = note.bookId; bookModalHighlightPage = 1; }}
+											title="Klik untuk membuka detail buku {note.bookTitle}"
 										>
+											<strong>{note.bookTitle}</strong>
+										</button>
+										<div style="display: flex; align-items: center; gap: 6px;">
+											<span style="font-size: 10px; font-family: var(--mono);">{note.page ? `Hlm. ${note.page}` : ''}</span>
+											<button
+												type="button"
+												class="highlight-visibility-badge {note.visible !== false ? 'is-public' : 'is-private'}"
+												title={note.visible !== false ? 'Ditampilkan di publik (Klik untuk sembunyikan)' : 'Disembunyikan dari publik (Klik untuk publikasikan)'}
+												onclick={() => updateHighlight(note.bookId, note.id, { visible: note.visible === false })}
+											>
+												{note.visible !== false ? '◉' : '○'}
+											</button>
+										</div>
 									</footer>
-								</blockquote>{/each}
+								</blockquote>
+							{/each}
 						</div>
+
+						<!-- Pagination for Highlights in the margins -->
+						{#if totalMarginPages > 1}
+							<div class="shelf-pagination" style="padding-top: 12px; margin-bottom: 16px;">
+								<span style="font-size: 10px;">
+									{(activeMarginPage - 1) * marginHighlightsPerPage + 1} - {Math.min(activeMarginPage * marginHighlightsPerPage, filteredMarginHighlights.length)} dari {filteredMarginHighlights.length}
+								</span>
+								<div class="pagination-controls">
+									<button
+										type="button"
+										class="pagination-btn"
+										style="min-width: 26px; height: 26px; font-size: 10px; padding: 0 6px;"
+										disabled={activeMarginPage <= 1}
+										onclick={() => (marginHighlightPage = activeMarginPage - 1)}
+									>
+										‹
+									</button>
+									<span style="font-family: var(--mono); font-size: 10px; padding: 0 4px;">
+										{activeMarginPage} / {totalMarginPages}
+									</span>
+									<button
+										type="button"
+										class="pagination-btn"
+										style="min-width: 26px; height: 26px; font-size: 10px; padding: 0 6px;"
+										disabled={activeMarginPage >= totalMarginPages}
+										onclick={() => (marginHighlightPage = activeMarginPage + 1)}
+									>
+										›
+									</button>
+								</div>
+							</div>
+						{/if}
 					{:else}
 						<div class="notes-empty">
 							<span>“</span>
-							<p>Your highlights will find a home here.</p>
-							<small>Mark a passage in KOReader to save it.</small>
+							<p>{marginSearchQuery || marginBookFilter !== 'all' ? 'Tidak ada kutipan yang cocok dengan filter.' : 'Your highlights will find a home here.'}</p>
+							<small>{marginSearchQuery || marginBookFilter !== 'all' ? 'Coba ganti filter buku atau kata kunci pencarian.' : 'Mark a passage in KOReader to save it.'}</small>
 						</div>
 					{/if}
 					<div class="reading-stamp">
@@ -527,6 +1020,281 @@
 					</div>
 				</aside>
 			</div>
+
+			<!-- Book Detail Modal -->
+			{#if selectedBook}
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<div
+					class="modal-backdrop"
+					role="dialog"
+					aria-modal="true"
+					tabindex="-1"
+					onclick={(e) => { if (e.target === e.currentTarget) selectedBookId = null; }}
+					onkeydown={(e) => { if (e.key === 'Escape') selectedBookId = null; }}
+				>
+					<div class="modal-window">
+						<header class="modal-header">
+							<div class="modal-header-book">
+								<div class="modal-cover-frame">
+									{#if selectedBook.coverUrl}
+										<img src={selectedBook.coverUrl} alt="Cover of {selectedBook.title}" />
+									{:else}
+										<div class="cover-placeholder" style="height: 100%;">
+											<span>{selectedBook.title.split(/\s+/).slice(0, 2).join(' ')}</span>
+										</div>
+									{/if}
+								</div>
+								<div class="modal-header-meta">
+									<div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+										<span class="status-dot status-dot--{selectedBook.status}"></span>
+										<small style="font-family: var(--mono); font-size: 10px; text-transform: uppercase;">
+											{selectedBook.status === 'finished' ? 'Selesai Dibaca' : selectedBook.status === 'paused' ? 'Dijeda' : 'Sedang Dibaca'}
+										</small>
+									</div>
+									<h2>{selectedBook.title}</h2>
+									<p>{selectedBook.authors.join(', ') || 'Penulis tidak diketahui'}</p>
+									<button
+										type="button"
+										class="highlight-visibility-badge {selectedBook.visible ? 'is-public' : 'is-private'}"
+										onclick={() => save({ bookId: selectedBook.id, visible: !selectedBook.visible })}
+									>
+										{selectedBook.visible ? '◉ Ditampilkan di Rak Publik' : '○ Disembunyikan dari Publik'}
+									</button>
+								</div>
+							</div>
+							<button
+								type="button"
+								class="modal-close-btn"
+								onclick={() => (selectedBookId = null)}
+								aria-label="Tutup detail buku"
+							>
+								×
+							</button>
+						</header>
+
+						<div class="modal-body">
+							<!-- Detailed reading info grid -->
+							<div class="detail-stats-grid">
+								<!-- 1. Baca sampai mana -->
+								<div class="detail-stat-card detail-stat-card--highlight">
+									<span class="stat-caption">📖 BACA SAMPAI MANA</span>
+									<strong>Halaman {selectedBook.currentPage} / {selectedBook.totalPages || '?'}</strong>
+									<div class="progress-line" style="margin: 4px 0;">
+										<div class="progress-track" style="height: 6px;">
+											<span style="width: {selectedBook.progress}%"></span>
+										</div>
+										<span style="font-size: 11px;">{selectedBook.progress}%</span>
+									</div>
+									<small>
+										{selectedBook.totalReadPages ?? selectedBook.currentPage} halaman tercatat telah dibaca
+									</small>
+								</div>
+
+								<!-- 2. Mulai tanggal kapan jam berapa -->
+								<div class="detail-stat-card">
+									<span class="stat-caption">🗓 MULAI DIBACA</span>
+									<strong>{formatDateTime(selectedBook.startedAt)}</strong>
+									<small>Tanggal & jam pertama kali buku dibuka</small>
+								</div>
+
+								<!-- 3. Sudah berapa lama baca buku -->
+								<div class="detail-stat-card">
+									<span class="stat-caption">⏱ TOTAL DURASI BACA</span>
+									<strong>{formatDuration(selectedBook.totalReadTime)}</strong>
+									<small>Total waktu yang dihabiskan untuk membaca</small>
+								</div>
+
+								<!-- 4. Sudah berapa hari -->
+								<div class="detail-stat-card">
+									<span class="stat-caption">📆 HARI MEMBACA</span>
+									<strong>
+										{getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt || new Date().toISOString())} hari
+									</strong>
+									<small>
+										{selectedBook.status === 'finished' ? 'Hingga selesai dibaca' : 'Sejak awal membaca hingga sekarang'}
+									</small>
+								</div>
+
+								<!-- 5. Kalau finished kapan finish dan butuh berapa lama -->
+								{#if selectedBook.status === 'finished' || selectedBook.finishedAt}
+									<div class="detail-stat-card" style="background: rgba(220, 106, 69, 0.08); border-color: var(--orange);">
+										<span class="stat-caption" style="color: var(--orange);">✨ STATUS SELESAI</span>
+										<strong>Tamat pada {formatDateTime(selectedBook.finishedAt || selectedBook.lastReadAt)}</strong>
+										<small>
+											Butuh waktu {getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt)} hari
+											({formatDuration(selectedBook.totalReadTime)} waktu membaca aktif)
+										</small>
+									</div>
+								{:else}
+									<div class="detail-stat-card">
+										<span class="stat-caption">🕒 TERAKHIR DIBACA</span>
+										<strong>{formatDateTime(selectedBook.lastReadAt)}</strong>
+										<small>Sesi membaca terakhir di KOReader</small>
+									</div>
+								{/if}
+							</div>
+
+							<!-- Highlights per book & Public Highlight setting -->
+							<div class="modal-highlights-section">
+								<div class="modal-highlights-header">
+									<div>
+										<h3>Catatan & Highlight ({selectedBook.highlights.length})</h3>
+										<small style="color: var(--muted); font-size: 11px;">
+											Atur catatan mana yang ingin ditampilkan atau disembunyikan di rak publik
+										</small>
+									</div>
+									{#if selectedBook.highlights.length > 0}
+										<div style="display: flex; gap: 6px;">
+											<button
+												type="button"
+												class="small-button"
+												onclick={() => setAllBookHighlightsVisible(selectedBook.id, true)}
+												title="Tampilkan semua highlight buku ini di publik"
+											>
+												Tampilkan Semua
+											</button>
+											<button
+												type="button"
+												class="small-button"
+												onclick={() => setAllBookHighlightsVisible(selectedBook.id, false)}
+												title="Sembunyikan semua highlight buku ini dari publik"
+											>
+												Sembunyikan Semua
+											</button>
+										</div>
+									{/if}
+								</div>
+
+								{#if selectedBook.highlights.length === 0}
+									<div style="padding: 24px; text-align: center; background: var(--paper-subtle); border-radius: 6px; border: 1px dashed var(--line); color: var(--muted); font-size: 12px;">
+										Belum ada highlight atau catatan untuk buku ini. Buat highlight di KOReader untuk menyimpannya di sini.
+									</div>
+								{:else}
+									{#each paginatedBookModalHighlights as hl (hl.id || hl.text)}
+										<div class="modal-highlight-item" class:is-private={hl.visible === false}>
+											{#if editingHighlightId === hl.id}
+												<div style="display: flex; flex-direction: column; gap: 8px;">
+													<label for="edit-hl-text-{hl.id}" style="font-size: 11px; font-weight: 600;">Teks Kutipan:</label>
+													<textarea
+														id="edit-hl-text-{hl.id}"
+														rows="3"
+														bind:value={editHighlightText}
+														style="width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; font-family: var(--serif);"
+													></textarea>
+													<label for="edit-hl-note-{hl.id}" style="font-size: 11px; font-weight: 600;">Catatan Pribadi (opsional):</label>
+													<input
+														id="edit-hl-note-{hl.id}"
+														type="text"
+														bind:value={editHighlightNote}
+														placeholder="Tulis catatan..."
+														style="width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px;"
+													/>
+													<div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px;">
+														<button
+															type="button"
+															class="small-button"
+															onclick={() => (editingHighlightId = null)}
+														>
+															Batal
+														</button>
+														<button
+															type="button"
+															class="small-button button--dark"
+															onclick={() => updateHighlight(selectedBook.id, hl.id, { text: editHighlightText, note: editHighlightNote })}
+														>
+															Simpan
+														</button>
+													</div>
+												</div>
+											{:else}
+												<p class="modal-highlight-text">“{hl.text}”</p>
+												{#if hl.note}
+													<div class="modal-highlight-note">
+														<strong>Catatan:</strong> {hl.note}
+													</div>
+												{/if}
+												<div class="modal-highlight-footer">
+													<span>
+														{hl.page ? `Halaman ${hl.page}` : 'Catatan'}
+														{#if hl.createdAt} · {formatDateTime(hl.createdAt)}{/if}
+													</span>
+													<div style="display: flex; align-items: center; gap: 6px;">
+														<button
+															type="button"
+															class="highlight-visibility-badge {hl.visible !== false ? 'is-public' : 'is-private'}"
+															title="Klik untuk mengubah visibilitas publik"
+															onclick={() => updateHighlight(selectedBook.id, hl.id, { visible: hl.visible === false })}
+														>
+															{hl.visible !== false ? '◉ Publik' : '○ Privat (Disembunyikan)'}
+														</button>
+														<button
+															type="button"
+															class="small-button"
+															style="padding: 2px 7px; font-size: 10px;"
+															onclick={() => {
+																editingHighlightId = hl.id;
+																editHighlightText = hl.text;
+																editHighlightNote = hl.note ?? '';
+															}}
+														>
+															Edit
+														</button>
+														<button
+															type="button"
+															class="small-button"
+															style="padding: 2px 7px; font-size: 10px; color: var(--orange);"
+															onclick={() => deleteHighlight(selectedBook.id, hl.id)}
+															title="Hapus highlight ini"
+														>
+															Hapus
+														</button>
+													</div>
+												</div>
+											{/if}
+										</div>
+									{/each}
+
+									{#if totalBookModalHighlightPages > 1}
+										<div class="shelf-pagination" style="padding-top: 10px;">
+											<span>
+												Halaman {activeBookModalHighlightPage} dari {totalBookModalHighlightPages}
+											</span>
+											<div class="pagination-controls">
+												<button
+													type="button"
+													class="pagination-btn"
+													disabled={activeBookModalHighlightPage <= 1}
+													onclick={() => (bookModalHighlightPage = activeBookModalHighlightPage - 1)}
+												>
+													‹
+												</button>
+												{#each Array.from({ length: totalBookModalHighlightPages }, (_, i) => i + 1) as p}
+													<button
+														type="button"
+														class="pagination-btn"
+														class:active={p === activeBookModalHighlightPage}
+														onclick={() => (bookModalHighlightPage = p)}
+													>
+														{p}
+													</button>
+												{/each}
+												<button
+													type="button"
+													class="pagination-btn"
+													disabled={activeBookModalHighlightPage >= totalBookModalHighlightPages}
+													onclick={() => (bookModalHighlightPage = activeBookModalHighlightPage + 1)}
+												>
+													›
+												</button>
+											</div>
+										</div>
+									{/if}
+								{/if}
+							</div>
+						</div>
+					</div>
+				</div>
+			{/if}
 			<footer class="page-footer">
 				<span>KO · LIBRI <i>✳</i> YOUR READING, REMEMBERED</span><span>PRIVATE BY DEFAULT</span>
 			</footer>

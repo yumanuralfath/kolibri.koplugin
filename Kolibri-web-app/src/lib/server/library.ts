@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
 	getBooks,
 	getReadingSessions,
@@ -8,11 +9,37 @@ import {
 } from './database';
 
 export type Highlight = {
+	id: string;
 	text: string;
 	note?: string;
 	page?: number;
 	createdAt?: string;
+	visible: boolean;
 };
+
+export function isPageBookmark(text?: string): boolean {
+	if (!text) return true;
+	const trimmed = text.trim();
+	if (!trimmed) return true;
+	return (
+		/^in \d+$/i.test(trimmed) ||
+		/^in chapter/i.test(trimmed) ||
+		/^🔖\s*bookmark/i.test(trimmed) ||
+		/^bookmark\b/i.test(trimmed) ||
+		/^page \d+/i.test(trimmed) ||
+		/^hal(aman)?\s*\.?\s*\d+/i.test(trimmed)
+	);
+}
+
+export function createHighlightId(
+	bookId: string,
+	text: string,
+	page?: number,
+	createdAt?: string
+): string {
+	const raw = `${bookId}:${page ?? ''}:${createdAt ?? ''}:${text.trim()}`;
+	return createHash('sha1').update(raw).digest('hex').slice(0, 16);
+}
 
 export type ReadingSession = {
 	id: string;

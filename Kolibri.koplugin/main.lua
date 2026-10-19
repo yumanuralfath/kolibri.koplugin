@@ -89,6 +89,22 @@ function Kolibri:onPosUpdate()
     Sync.markActivity()
 end
 
+function Kolibri:onAnnotationsModified()
+    Sync.markActivity()
+end
+
+function Kolibri:onBookmarkModified()
+    Sync.markActivity()
+end
+
+function Kolibri:onBookmarksModified()
+    Sync.markActivity()
+end
+
+function Kolibri:onHighlightAdded()
+    Sync.markActivity()
+end
+
 function Kolibri:onNetworkConnected()
     UIManager:scheduleIn(CONNECT_DELAY, function()
         Sync.request(self.ui, config, "connect")

@@ -16,6 +16,17 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		visible?: boolean;
 		coverUrl?: string | null;
 		published?: boolean;
+		startedAt?: string;
+		finishedAt?: string;
+		status?: 'reading' | 'finished' | 'paused';
+		highlightId?: string;
+		highlight?: {
+			visible?: boolean;
+			note?: string;
+			text?: string;
+		};
+		setAllHighlightsVisible?: boolean;
+		deleteHighlightId?: string;
 	} | null;
 	if (!body) return json({ error: 'Invalid request.' }, { status: 400 });
 	const library = updateLibrary((data) => {
@@ -29,6 +40,32 @@ export const PATCH: RequestHandler = async ({ request }) => {
 				if (typeof body.visible === 'boolean') book.visible = body.visible;
 				if (body.coverUrl !== undefined) {
 					book.coverUrl = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
+				}
+				if (body.startedAt) book.startedAt = String(body.startedAt);
+				if (body.finishedAt !== undefined) book.finishedAt = body.finishedAt ? String(body.finishedAt) : undefined;
+				if (body.status) book.status = body.status;
+
+				if (body.highlightId && body.highlight) {
+					const hl = book.highlights?.find((h) => h.id === body.highlightId);
+					if (hl) {
+						if (body.highlight.visible !== undefined) hl.visible = Boolean(body.highlight.visible);
+						if (body.highlight.note !== undefined) {
+							hl.note = body.highlight.note ? String(body.highlight.note).slice(0, 10_000) : undefined;
+						}
+						if (body.highlight.text !== undefined) {
+							hl.text = String(body.highlight.text).slice(0, 20_000);
+						}
+					}
+				}
+
+				if (typeof body.setAllHighlightsVisible === 'boolean') {
+					for (const hl of book.highlights ?? []) {
+						hl.visible = body.setAllHighlightsVisible;
+					}
+				}
+
+				if (body.deleteHighlightId) {
+					book.highlights = (book.highlights ?? []).filter((h) => h.id !== body.deleteHighlightId);
 				}
 			}
 		}

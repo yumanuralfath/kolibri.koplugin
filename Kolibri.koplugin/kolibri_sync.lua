@@ -221,8 +221,8 @@ function Sync.request(ui, config, trigger, opts)
     if not manual then
         local now = os.time()
         local urgent = trigger == "connect" or trigger == "close"
-        local floor = urgent and 60 or (tonumber(config:get("interval_minutes")) or 10) * 60
-        if now - (config:get("last_attempt") or 0) < floor
+        local floor = trigger == "close" and 0 or (trigger == "connect" and 15 or (tonumber(config:get("interval_minutes")) or 10) * 60)
+        if (floor > 0 and now - (config:get("last_attempt") or 0) < floor)
             or (not urgent and now < Sync.backoff_until) then
             Sync.dirty = true
             return false, "throttled"

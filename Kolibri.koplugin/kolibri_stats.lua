@@ -56,6 +56,124 @@ function Stats.flushCurrentSession(ui)
     end
 end
 
+local function loadLuaTable(path)
+    if not path or path == "" then return nil end
+    local ok, chunk = pcall(loadfile, path)
+    if ok and type(chunk) == "function" then
+        local success, data = pcall(chunk)
+        if success and type(data) == "table" then
+            return data
+        end
+    end
+    return nil
+end
+
+local function isBookmarkOnly(text)
+    if not text or text == "" then return true end
+    local lower = text:lower()
+    if lower:match("^in %d+$")
+        or lower:match("^in chapter")
+        or lower:match("^page %d+")
+        or lower:match("^hal.*%d+")
+        or lower:match("^🔖 bookmark")
+        or lower:match("^bookmark") then
+        return true
+    end
+    return false
+end
+
+local function parseHighlightsFromEntries(raw_items, ui)
+    local result = {}
+    local seen = {}
+
+    for _, item in ipairs(raw_items or {}) do
+        if type(item) == "table" then
+            local page = highlightPage(ui, item)
+            local page_str = tostring(page or item.pageno or item.page or "")
+
+            local item_text = trim(item.text)
+            local item_notes = trim(item.notes)
+            local item_note = trim(item.note)
+
+            local text = ""
+            local note = nil
+
+            if item_notes ~= "" then
+                -- Real highlight text in KOReader bookmarks/annotations
+                text = item_notes
+                if item_note ~= "" and item_note ~= item_notes then
+                    note = item_note
+                elseif item_text ~= "" and item_text ~= item_notes and not isBookmarkOnly(item_text) then
+                    note = item_text
+                end
+            elseif item.drawer and item_text ~= "" then
+                -- Highlight with visual drawer marker
+                text = item_text
+                if item_note ~= "" and item_note ~= item_text then
+                    note = item_note
+                end
+            elseif item_text ~= "" and not isBookmarkOnly(item_text) then
+                -- Custom highlight text or note
+                text = item_text
+                if item_note ~= "" and item_note ~= item_text then
+                    note = item_note
+                end
+            elseif item_note ~= "" and not isBookmarkOnly(item_note) then
+                text = item_note
+                note = "Catatan"
+            end
+
+            -- Pure page bookmarks (e.g. "in 1", dog-ears, "🔖 Bookmark") are excluded
+            if text ~= "" and not isBookmarkOnly(text) then
+                local dedup_key = (item.datetime or "") .. ":" .. page_str .. ":" .. text
+                if not seen[dedup_key] then
+                    seen[dedup_key] = true
+                    result[#result + 1] = {
+                        text = text,
+                        note = (note and note ~= text) and note or nil,
+                        page = page,
+                        createdAt = item.datetime or item.datetime_updated,
+                    }
+                end
+            end
+        end
+    end
+    return result
+end
+
+local function scanHighlightsFromHistory()
+    local highlightsByMd5 = {}
+    local historyPath = DataStorage:getSettingsDir() .. "/history.lua"
+    local history = loadLuaTable(historyPath)
+    if type(history) ~= "table" then return highlightsByMd5 end
+
+    for _, entry in ipairs(history) do
+        local file = entry.file
+        if file and file ~= "" then
+            local ext = file:match("%.([^.]+)$")
+            if ext then
+                local sdrPath = file:gsub("%.[^.]+$", ".sdr") .. "/metadata." .. ext .. ".lua"
+                local meta = loadLuaTable(sdrPath)
+                if meta then
+                    local md5 = cleanId(meta.stats and meta.stats.md5 or meta.partial_md5_checksum or meta.doc_md5)
+                    local raw_entries = {}
+                    if type(meta.annotations) == "table" then
+                        for _, a in ipairs(meta.annotations) do raw_entries[#raw_entries + 1] = a end
+                    end
+                    if type(meta.bookmarks) == "table" then
+                        for _, b in ipairs(meta.bookmarks) do raw_entries[#raw_entries + 1] = b end
+                    end
+                    local hls = parseHighlightsFromEntries(raw_entries, nil)
+                    if #hls > 0 and md5 ~= "" then
+                        highlightsByMd5[md5] = hls
+                    end
+                end
+            end
+        end
+    end
+    return highlightsByMd5
+end
+
 --- All books known to the statistics plugin.
 function Stats.readBooks(conn)
     local base = "SELECT id, title, authors, notes, last_open, highlights, pages, series, language, md5"
@@ -64,17 +182,19 @@ function Stats.readBooks(conn)
     if not has_totals then
         result, count = query(conn, base .. ", 0, 0 FROM book")
     end
+    local highlightsByMd5 = scanHighlightsFromHistory()
     local books = {}
     for row = 1, count do
         local md5 = cleanId(result[10][row])
         if md5 ~= "" then
+            local bookHighlights = highlightsByMd5[md5]
             books[#books + 1] = {
                 id = md5,
                 title = asString(result[2][row]),
                 authors = asString(result[3][row]),
                 notes = tonumber(result[4][row]) or 0,
                 last_open = tonumber(result[5][row]) or 0,
-                highlights = tonumber(result[6][row]) or 0,
+                highlights = bookHighlights or tonumber(result[6][row]) or 0,
                 pages = tonumber(result[7][row]) or 0,
                 series = asString(result[8][row]),
                 language = asString(result[9][row]),
@@ -166,7 +286,10 @@ end
 
 local function bookId(ui, props, filename, known_books)
     local id
-    if ui.doc_settings then
+    if ui and ui.statistics and ui.statistics.doc_md5 and ui.statistics.doc_md5 ~= "" then
+        id = ui.statistics.doc_md5
+    end
+    if (not id or id == "") and ui and ui.doc_settings then
         id = ui.doc_settings:readSetting("partial_md5_checksum")
     end
     if (not id or id == "") and filename ~= "" then
@@ -208,7 +331,7 @@ end
 local function highlightPage(ui, item)
     local page = item.pageno or item.page
     if tonumber(page) then return tonumber(page) end
-    if type(page) == "string" and ui.document and ui.document.getPageFromXPointer then
+    if type(page) == "string" and ui and ui.document and ui.document.getPageFromXPointer then
         local ok, number = pcall(function() return ui.document:getPageFromXPointer(page) end)
         if ok and tonumber(number) then return tonumber(number) end
     end
@@ -217,27 +340,41 @@ end
 
 --- Highlights and notes of the open book.
 function Stats.highlights(ui)
-    local entries = ui and ui.annotation and ui.annotation.annotations
-    if type(entries) ~= "table" then
-        local doc_settings = ui and ui.doc_settings
-        entries = doc_settings and doc_settings:readSetting("annotations")
-    end
-    local result = {}
-    if type(entries) ~= "table" then return result end
-    for _, item in ipairs(entries) do
-        local text = trim(item.text)
-        local note = trim(item.note)
-        if text == "" then text = note end -- note-only annotation
-        if text ~= "" then
-            result[#result + 1] = {
-                text = text,
-                note = (note ~= "" and note ~= text) and note or nil,
-                page = highlightPage(ui, item),
-                createdAt = item.datetime,
-            }
+    local raw_items = {}
+
+    local function appendEntries(tbl)
+        if type(tbl) ~= "table" then return end
+        for _, entry in ipairs(tbl) do
+            if type(entry) == "table" then
+                raw_items[#raw_items + 1] = entry
+            end
         end
     end
-    return result
+
+    -- 1. Try active ReaderAnnotation module (live in-memory annotations)
+    if ui and ui.annotation and type(ui.annotation.annotations) == "table" then
+        appendEntries(ui.annotation.annotations)
+    end
+    -- 2. Try active ReaderBookmark module
+    if ui and ui.bookmark and type(ui.bookmark.bookmarks) == "table" then
+        appendEntries(ui.bookmark.bookmarks)
+    end
+    -- 3. Try document settings bookmarks (standard KOReader storage)
+    if ui and ui.doc_settings then
+        appendEntries(ui.doc_settings:readSetting("bookmarks"))
+    end
+    -- 4. Try document settings annotations
+    if ui and ui.doc_settings then
+        appendEntries(ui.doc_settings:readSetting("annotations"))
+    end
+    -- 5. Try document settings highlight tables
+    if ui and ui.doc_settings then
+        for _, key in ipairs({ "highlight", "highlight_rolling", "highlight_paging" }) do
+            appendEntries(ui.doc_settings:readSetting(key))
+        end
+    end
+
+    return parseHighlightsFromEntries(raw_items, ui)
 end
 
 return Stats

@@ -1,6 +1,10 @@
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { json } from '@sveltejs/kit';
 import { hasSyncPassword } from '../../../lib/server/auth';
 import {
+	createHighlightId,
+	isPageBookmark,
 	saveIncomingSessions,
 	updateLibrary,
 	type Book,
@@ -12,14 +16,16 @@ import type { RequestHandler } from './$types';
 type SyncPayload = {
 	book?: Partial<Book>;
 	books?: Record<string, unknown>[];
-	highlights?: Highlight[];
+	highlights?: unknown;
 	stats?: Record<string, unknown>[];
 };
 
 // KOReader's JSON encoder serialises an empty Lua table as `{}` instead of `[]`,
 // so every list from the plugin must be treated as untrusted.
 function asArray<T>(value: unknown): T[] {
-	return Array.isArray(value) ? (value as T[]) : [];
+	if (Array.isArray(value)) return value as T[];
+	if (value && typeof value === 'object') return Object.values(value) as T[];
+	return [];
 }
 
 function cleanId(value: unknown): string {
@@ -40,17 +46,30 @@ function parseAuthors(value: unknown): string[] {
 	return [];
 }
 
-function cleanHighlights(value: unknown): Highlight[] {
-	if (!Array.isArray(value)) return [];
-	return value
-		.filter((item): item is Highlight => Boolean(item && typeof item === 'object'))
-		.map((item) => ({
-			text: String(item.text ?? '').slice(0, 20_000),
-			note: item.note ? String(item.note).slice(0, 10_000) : undefined,
-			page: Number.isFinite(Number(item.page)) ? Number(item.page) : undefined,
-			createdAt: item.createdAt ? String(item.createdAt) : undefined
-		}))
-		.filter((item) => item.text.length > 0);
+function cleanHighlights(value: unknown, bookId: string = ''): Highlight[] {
+	if (!value || typeof value !== 'object') return [];
+	const items = Array.isArray(value) ? value : Object.values(value);
+	return items
+		.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+		.map((item) => {
+			const text = String(item.text ?? item.notes ?? '').slice(0, 20_000);
+			const note = item.note ? String(item.note).slice(0, 10_000) : undefined;
+			const page = Number.isFinite(Number(item.page ?? item.pageno))
+				? Number(item.page ?? item.pageno)
+				: undefined;
+			const createdAt = item.createdAt || item.datetime ? String(item.createdAt || item.datetime) : undefined;
+			const id = String(item.id || createHighlightId(bookId, text, page, createdAt));
+			const visible = item.visible !== false;
+			return {
+				id,
+				text,
+				note,
+				page,
+				createdAt,
+				visible
+			};
+		})
+		.filter((item) => item.text.trim().length > 0 && !isPageBookmark(item.text));
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -61,22 +80,38 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 	const incomingBooks = asArray<Record<string, unknown>>(payload.books);
 	const incomingStats = asArray<Record<string, unknown>>(payload.stats);
+	const incomingHighlights = [
+		...cleanHighlights(payload?.highlights),
+		...cleanHighlights(payload?.book?.highlights)
+	];
 	const source = payload.book;
 	const id = cleanId(source?.id);
 	const title = String(source?.title ?? '')
 		.trim()
 		.slice(0, 500);
+
+	try {
+		appendFileSync(
+			join(process.cwd(), 'data', 'sync.log'),
+			`[${new Date().toISOString()}] Sync POST: bookId=${id}, title="${title}", highlightsCount=${incomingHighlights.length}, rawHighlights=${JSON.stringify(payload?.highlights)?.slice(0, 300)}, booksCount=${incomingBooks.length}, statsCount=${incomingStats.length}\n`
+		);
+	} catch {}
 	// A library-only sync (no book currently open) is valid as long as it carries data.
 	const hasCurrentBook = Boolean(id && title);
-	if (!hasCurrentBook && incomingBooks.length === 0 && incomingStats.length === 0) {
+	if (
+		!hasCurrentBook &&
+		incomingBooks.length === 0 &&
+		incomingStats.length === 0 &&
+		incomingHighlights.length === 0
+	) {
 		return json({ error: 'Book id and title are required.' }, { status: 400 });
 	}
 
 	const currentPage = Math.max(0, Number(source?.currentPage) || 0);
 	const now = new Date().toISOString();
-	const incomingHighlights = cleanHighlights(payload?.highlights);
 	const booksById = new Map<string, Record<string, unknown>>();
 	const latestPageByBook = new Map<string, { page: number; startTime: number }>();
+	const earliestSessionByBook = new Map<string, number>();
 	for (const item of incomingBooks) {
 		const bookId = cleanId(item.md5 ?? item.id);
 		if (bookId) booksById.set(bookId, item);
@@ -94,14 +129,24 @@ export const POST: RequestHandler = async ({ request }) => {
 		) {
 			latestPageByBook.set(bookId, { page, startTime });
 		}
+		if (bookId && Number.isFinite(startTime) && startTime > 0) {
+			const curEarliest = earliestSessionByBook.get(bookId);
+			if (!curEarliest || startTime < curEarliest) {
+				earliestSessionByBook.set(bookId, startTime);
+			}
+		}
 	}
 	if (source && hasCurrentBook) booksById.set(id, { ...booksById.get(id), ...source, id });
 
+	let attachedHighlightsToAny = false;
 	const library = await updateLibrary((data) => {
 		for (const [bookId, metadata] of booksById) {
 			const existingIndex = data.books.findIndex((book) => book.id === bookId);
 			const existing = existingIndex >= 0 ? data.books[existingIndex] : undefined;
 			const isCurrentBook = bookId === id;
+			if (isCurrentBook && incomingHighlights.length > 0) {
+				attachedHighlightsToAny = true;
+			}
 			const bookTotalPages = Math.max(0, Number(metadata.totalPages ?? metadata.pages) || 0);
 			const bookCurrentPage = isCurrentBook
 				? currentPage
@@ -117,13 +162,46 @@ export const POST: RequestHandler = async ({ request }) => {
 					: (existing?.progress ?? 0);
 			const bookStatus: Book['status'] =
 				bookProgress >= 100 ? 'finished' : existing?.status === 'paused' ? 'paused' : 'reading';
+			const bookHighlights = cleanHighlights(metadata.highlights, bookId);
 			const highlightMap = new Map<string, Highlight>();
-			for (const highlight of [
-				...(existing?.highlights ?? []),
-				...(isCurrentBook ? incomingHighlights : [])
-			]) {
-				highlightMap.set(`${highlight.page ?? ''}:${highlight.text}`, highlight);
+			for (const hl of existing?.highlights ?? []) {
+				if (isPageBookmark(hl.text)) continue;
+				const key = `${hl.page ?? ''}:${hl.text.trim()}`;
+				highlightMap.set(key, hl);
 			}
+			for (const incoming of [...(isCurrentBook ? incomingHighlights : []), ...bookHighlights]) {
+				if (isPageBookmark(incoming.text)) continue;
+				const key = `${incoming.page ?? ''}:${incoming.text.trim()}`;
+				const existingHl = highlightMap.get(key);
+				if (existingHl) {
+					highlightMap.set(key, {
+						...incoming,
+						id: existingHl.id,
+						visible: existingHl.visible !== false,
+						note: existingHl.note ?? incoming.note
+					});
+				} else {
+					highlightMap.set(key, incoming);
+				}
+			}
+
+			const earliestStart = earliestSessionByBook.get(bookId);
+			let bookStartedAt = existing?.startedAt;
+			if (earliestStart) {
+				const sessionDate = new Date(earliestStart * 1000).toISOString();
+				if (!bookStartedAt || new Date(sessionDate).getTime() < new Date(bookStartedAt).getTime()) {
+					bookStartedAt = sessionDate;
+				}
+			}
+			if (!bookStartedAt) bookStartedAt = now;
+
+			let finishedAt = existing?.finishedAt;
+			if (bookStatus === 'finished' && !finishedAt) {
+				finishedAt = metadata.last_open
+					? new Date(Number(metadata.last_open) * 1000).toISOString()
+					: (existing?.lastReadAt ?? now);
+			}
+
 			const book: Book = {
 				id: bookId,
 				title: String(
@@ -146,17 +224,46 @@ export const POST: RequestHandler = async ({ request }) => {
 					Number(metadata.total_read_time) || existing?.totalReadTime || 0
 				),
 				status: bookStatus,
-				startedAt: existing?.startedAt ?? now,
+				startedAt: bookStartedAt,
 				lastReadAt: metadata.last_open
 					? new Date(Number(metadata.last_open) * 1000).toISOString()
 					: (existing?.lastReadAt ?? now),
-				finishedAt: bookStatus === 'finished' ? (existing?.finishedAt ?? now) : undefined,
+				finishedAt,
 				coverUrl: existing?.coverUrl,
 				visible: existing?.visible ?? true,
 				highlights: [...highlightMap.values()]
 			};
 			if (existingIndex >= 0) data.books[existingIndex] = book;
 			else data.books.push(book);
+		}
+
+		data.books.sort((a, b) => new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime());
+
+		// Fallback: If incoming highlights were sent but not attached, attach to the most recently read book
+		if (!attachedHighlightsToAny && incomingHighlights.length > 0 && data.books.length > 0) {
+			const target = data.books[0];
+			const highlightMap = new Map<string, Highlight>();
+			for (const hl of target.highlights ?? []) {
+				if (isPageBookmark(hl.text)) continue;
+				const key = `${hl.page ?? ''}:${hl.text.trim()}`;
+				highlightMap.set(key, hl);
+			}
+			for (const incoming of incomingHighlights) {
+				if (isPageBookmark(incoming.text)) continue;
+				const key = `${incoming.page ?? ''}:${incoming.text.trim()}`;
+				const existingHl = highlightMap.get(key);
+				if (existingHl) {
+					highlightMap.set(key, {
+						...incoming,
+						id: existingHl.id,
+						visible: existingHl.visible !== false,
+						note: existingHl.note ?? incoming.note
+					});
+				} else {
+					highlightMap.set(key, incoming);
+				}
+			}
+			target.highlights = [...highlightMap.values()];
 		}
 	});
 	const sessions = incomingStats

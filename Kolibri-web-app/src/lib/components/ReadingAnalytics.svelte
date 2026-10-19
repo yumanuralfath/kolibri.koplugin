@@ -17,6 +17,10 @@
 	let monthlyCanvas = $state<HTMLCanvasElement>();
 	let weekdayCanvas = $state<HTMLCanvasElement>();
 
+	let dailyChartInstance: Chart | null = null;
+	let monthlyChartInstance: Chart | null = null;
+	let weekdayChartInstance: Chart | null = null;
+
 	function dayKey(date: Date): string {
 		return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 	}
@@ -88,21 +92,231 @@
 		};
 	});
 
+	type CalendarCell = {
+		date: Date;
+		dateStr: string;
+		label: string;
+		seconds: number;
+		minutes: number;
+		hours: number;
+		pages: number;
+		level: 0 | 1 | 2 | 3 | 4;
+		isFuture: boolean;
+		isToday: boolean;
+	};
+
+	type CalendarWeek = {
+		days: (CalendarCell | null)[];
+		monthLabel?: string;
+	};
+
+	let hoveredCell = $state<CalendarCell | null>(null);
+
+	let calendarData = $derived.by(() => {
+		const daysMap = new Map<string, { seconds: number; pages: Set<string> }>();
+		for (const session of sessions) {
+			if (!session.startTime) continue;
+			const d = new Date(session.startTime * 1000);
+			const k = dayKey(d);
+			const entry = daysMap.get(k) ?? { seconds: 0, pages: new Set<string>() };
+			entry.seconds += session.duration;
+			entry.pages.add(`${session.bookId}:${session.page}`);
+			daysMap.set(k, entry);
+		}
+
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const todayKey = dayKey(today);
+
+		// GitHub standard: 53 weeks ending on the current week's Saturday
+		const endDayOfWeek = today.getDay(); // 0 is Sun, 6 is Sat
+		const daysUntilSaturday = 6 - endDayOfWeek;
+		const endDate = new Date(today);
+		endDate.setDate(today.getDate() + daysUntilSaturday);
+
+		const startDate = new Date(endDate);
+		startDate.setDate(endDate.getDate() - (53 * 7 - 1));
+
+		const weeks: CalendarWeek[] = [];
+		let currentWeekDays: (CalendarCell | null)[] = [];
+		let lastMonth = -1;
+
+		let maxStreak = 0;
+		let currentRunningStreak = 0;
+		let yearTotalSeconds = 0;
+		let yearActiveDays = 0;
+
+		const iterDate = new Date(startDate);
+		while (iterDate <= endDate) {
+			const dayOfWeek = iterDate.getDay();
+			const dateStr = dayKey(iterDate);
+			const isToday = dateStr === todayKey;
+			const isFuture = iterDate > today;
+			const data = daysMap.get(dateStr);
+			const seconds = !isFuture && data ? data.seconds : 0;
+			const minutes = Math.round(seconds / 60);
+			const hours = Math.round((seconds / 3600) * 10) / 10;
+			const pages = !isFuture && data ? data.pages.size : 0;
+
+			let level: 0 | 1 | 2 | 3 | 4 = 0;
+			if (seconds > 0) {
+				if (seconds <= 900) level = 1;
+				else if (seconds <= 2700) level = 2;
+				else if (seconds <= 5400) level = 3;
+				else level = 4;
+			}
+
+			if (!isFuture) {
+				yearTotalSeconds += seconds;
+				if (seconds > 0) {
+					yearActiveDays++;
+					currentRunningStreak++;
+					if (currentRunningStreak > maxStreak) maxStreak = currentRunningStreak;
+				} else {
+					currentRunningStreak = 0;
+				}
+			}
+
+			const formattedDate = new Intl.DateTimeFormat('id-ID', {
+				weekday: 'long',
+				day: 'numeric',
+				month: 'short',
+				year: 'numeric'
+			}).format(iterDate);
+
+			const cell: CalendarCell = {
+				date: new Date(iterDate),
+				dateStr,
+				label: formattedDate,
+				seconds,
+				minutes,
+				hours,
+				pages,
+				level,
+				isFuture,
+				isToday
+			};
+
+			currentWeekDays.push(cell);
+
+			if (dayOfWeek === 6) {
+				let monthLabel: string | undefined = undefined;
+				const firstInWeek = currentWeekDays.find(
+					(c) => c && c.date.getDate() <= 7 && c.date.getMonth() !== lastMonth
+				);
+				if (firstInWeek) {
+					monthLabel = new Intl.DateTimeFormat('id-ID', { month: 'short' }).format(
+						firstInWeek.date
+					);
+					lastMonth = firstInWeek.date.getMonth();
+				}
+				weeks.push({
+					days: currentWeekDays,
+					monthLabel
+				});
+				currentWeekDays = [];
+			}
+
+			iterDate.setDate(iterDate.getDate() + 1);
+		}
+
+		let activeStreak = 0;
+		const checkDate = new Date(today);
+		while (true) {
+			const k = dayKey(checkDate);
+			const s = daysMap.get(k)?.seconds ?? 0;
+			if (s > 0) {
+				activeStreak++;
+				checkDate.setDate(checkDate.getDate() - 1);
+			} else if (k === todayKey) {
+				checkDate.setDate(checkDate.getDate() - 1);
+				const yestKey = dayKey(checkDate);
+				if ((daysMap.get(yestKey)?.seconds ?? 0) === 0) break;
+			} else {
+				break;
+			}
+		}
+
+		return {
+			weeks,
+			maxStreak,
+			currentStreak: activeStreak,
+			yearTotalSeconds,
+			yearActiveDays,
+			yearTotalHours: Math.round((yearTotalSeconds / 3600) * 10) / 10
+		};
+	});
+
 	function durationLabel(seconds: number): string {
 		const hours = Math.floor(seconds / 3600);
 		const minutes = Math.round((seconds % 3600) / 60);
 		return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 	}
 
-	onMount(() => {
+	function getThemeColors() {
+		if (typeof document === 'undefined') {
+			return {
+				grid: '#dedfd6',
+				ticks: '#777b72',
+				tooltipBg: '#20231f',
+				tooltipText: '#f5f5ef',
+				lineBorder: '#3b6b53',
+				lineBg: '#3b6b5326',
+				barMonthly: '#dc6a45',
+				barWeekday: '#718f73'
+			};
+		}
+		const theme = document.documentElement.getAttribute('data-theme') || 'light';
+		if (theme === 'dark') {
+			return {
+				grid: '#2b312a',
+				ticks: '#8e958a',
+				tooltipBg: '#1f241f',
+				tooltipText: '#e8eae5',
+				lineBorder: '#529976',
+				lineBg: '#52997633',
+				barMonthly: '#e07450',
+				barWeekday: '#529976'
+			};
+		}
+		if (theme === 'sepia') {
+			return {
+				grid: '#ded0b4',
+				ticks: '#826e59',
+				tooltipBg: '#3b2c1d',
+				tooltipText: '#fbf7ee',
+				lineBorder: '#4f6f4d',
+				lineBg: '#4f6f4d26',
+				barMonthly: '#cc603d',
+				barWeekday: '#758866'
+			};
+		}
+		return {
+			grid: '#dedfd6',
+			ticks: '#777b72',
+			tooltipBg: '#20231f',
+			tooltipText: '#f5f5ef',
+			lineBorder: '#3b6b53',
+			lineBg: '#3b6b5326',
+			barMonthly: '#dc6a45',
+			barWeekday: '#718f73'
+		};
+	}
+
+	function buildCharts() {
 		if (!dailyCanvas || !monthlyCanvas || !weekdayCanvas) return;
+		destroyCharts();
+
+		const colors = getThemeColors();
 		const shared = {
 			responsive: true,
 			maintainAspectRatio: false,
 			plugins: {
 				legend: { display: false },
 				tooltip: {
-					backgroundColor: '#20231f',
+					backgroundColor: colors.tooltipBg,
+					titleColor: colors.tooltipText,
+					bodyColor: colors.tooltipText,
 					padding: 10,
 					titleFont: { family: 'DM Mono' },
 					bodyFont: { family: 'DM Sans' }
@@ -112,25 +326,26 @@
 				x: {
 					grid: { display: false },
 					border: { display: false },
-					ticks: { color: '#777b72', maxTicksLimit: 7, font: { family: 'DM Mono', size: 9 } }
+					ticks: { color: colors.ticks, maxTicksLimit: 7, font: { family: 'DM Mono', size: 9 } }
 				},
 				y: {
 					beginAtZero: true,
-					grid: { color: '#dedfd6' },
+					grid: { color: colors.grid },
 					border: { display: false },
-					ticks: { color: '#777b72', precision: 0, font: { family: 'DM Mono', size: 9 } }
+					ticks: { color: colors.ticks, precision: 0, font: { family: 'DM Mono', size: 9 } }
 				}
 			}
 		};
-		const dailyChart = new Chart(dailyCanvas, {
+
+		dailyChartInstance = new Chart(dailyCanvas, {
 			type: 'line',
 			data: {
 				labels: aggregated.daily.map((item) => item.label),
 				datasets: [
 					{
 						data: aggregated.daily.map((item) => item.pages),
-						borderColor: '#3b6b53',
-						backgroundColor: '#3b6b5326',
+						borderColor: colors.lineBorder,
+						backgroundColor: colors.lineBg,
 						fill: true,
 						tension: 0.35,
 						pointRadius: 2,
@@ -150,14 +365,15 @@
 				}
 			}
 		});
-		const monthlyChart = new Chart(monthlyCanvas, {
+
+		monthlyChartInstance = new Chart(monthlyCanvas, {
 			type: 'bar',
 			data: {
 				labels: aggregated.monthly.map((item) => item.label),
 				datasets: [
 					{
 						data: aggregated.monthly.map((item) => item.hours),
-						backgroundColor: '#dc6a45',
+						backgroundColor: colors.barMonthly,
 						borderRadius: 3,
 						maxBarThickness: 25
 					}
@@ -174,14 +390,15 @@
 				}
 			}
 		});
-		const weekdayChart = new Chart(weekdayCanvas, {
+
+		weekdayChartInstance = new Chart(weekdayCanvas, {
 			type: 'bar',
 			data: {
 				labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
 				datasets: [
 					{
 						data: aggregated.weekdays.map((item) => Math.round(item.seconds / 60)),
-						backgroundColor: '#718f73',
+						backgroundColor: colors.barWeekday,
 						borderRadius: 3,
 						maxBarThickness: 34
 					}
@@ -198,10 +415,35 @@
 				}
 			}
 		});
+	}
+
+	function destroyCharts() {
+		dailyChartInstance?.destroy();
+		monthlyChartInstance?.destroy();
+		weekdayChartInstance?.destroy();
+		dailyChartInstance = null;
+		monthlyChartInstance = null;
+		weekdayChartInstance = null;
+	}
+
+	onMount(() => {
+		buildCharts();
+
+		const observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				if (mutation.attributeName === 'data-theme') {
+					buildCharts();
+				}
+			}
+		});
+		observer.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ['data-theme']
+		});
+
 		return () => {
-			dailyChart.destroy();
-			monthlyChart.destroy();
-			weekdayChart.destroy();
+			observer.disconnect();
+			destroyCharts();
 		};
 	});
 </script>
@@ -224,6 +466,112 @@
 		<div><span>LONGEST DAY</span><strong>{durationLabel(aggregated.longestDay)}</strong></div>
 		<div><span>BEST DAY</span><strong>{aggregated.bestPagesDay} pages</strong></div>
 	</div>
+
+	<!-- Reading Activity Heatmap Calendar (GitHub style) -->
+	<article class="reading-calendar-panel" aria-label="Kalender Aktivitas Membaca">
+		<div class="calendar-top-row">
+			<div>
+				<p class="eyebrow" style="margin-bottom: 2px;">KALENDER BACAAN</p>
+				<h3>Aktivitas Membaca 52 Minggu Terakhir</h3>
+				<p>Read hours per hari (semakin pekat warna kotak, semakin lama durasi membaca)</p>
+			</div>
+			<div class="calendar-badges">
+				<div class="calendar-badge">
+					<span>Waktu:</span>
+					<strong>{calendarData.yearTotalHours} jam</strong>
+				</div>
+				<div class="calendar-badge">
+					<span>Hari Aktif:</span>
+					<strong>{calendarData.yearActiveDays} hari</strong>
+				</div>
+				{#if calendarData.currentStreak > 0}
+					<div class="calendar-badge">
+						<span>Streak Saat Ini:</span>
+						<strong>🔥 {calendarData.currentStreak} hari</strong>
+					</div>
+				{/if}
+				{#if calendarData.maxStreak > 0}
+					<div class="calendar-badge">
+						<span>Streak Terpanjang:</span>
+						<strong>🏆 {calendarData.maxStreak} hari</strong>
+					</div>
+				{/if}
+			</div>
+		</div>
+
+		<div class="calendar-scroll-wrap">
+			<div class="calendar-grid-table">
+				<div class="calendar-weekdays-col" aria-hidden="true">
+					<span>Sen</span>
+					<span>Rab</span>
+					<span>Jum</span>
+				</div>
+				<div class="calendar-weeks-container">
+					<div class="calendar-months-row">
+						{#each calendarData.weeks as week}
+							<div class="calendar-month-item" style="width: 14px;">
+								{week.monthLabel ?? ''}
+							</div>
+						{/each}
+					</div>
+					<div class="calendar-cells-matrix">
+						{#each calendarData.weeks as week}
+							<div class="calendar-week-col">
+								{#each week.days as day}
+									{#if day}
+										<div
+											class="calendar-cell cal-level-{day.level}"
+											class:is-today={day.isToday}
+											class:is-future={day.isFuture}
+											role="gridcell"
+											tabindex="0"
+											aria-label="{day.label}: {day.seconds > 0 ? durationLabel(day.seconds) : 'Tidak ada aktivitas'}"
+											onmouseenter={() => (hoveredCell = day)}
+											onmouseleave={() => (hoveredCell = null)}
+											onfocus={() => (hoveredCell = day)}
+											onblur={() => (hoveredCell = null)}
+										></div>
+									{:else}
+										<div class="calendar-cell" style="opacity: 0;"></div>
+									{/if}
+								{/each}
+							</div>
+						{/each}
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="calendar-info-bar">
+			<div class="calendar-hover-text">
+				{#if hoveredCell}
+					<span>
+						📅 <strong>{hoveredCell.label}</strong>:
+						{#if hoveredCell.seconds > 0}
+							{durationLabel(hoveredCell.seconds)} ({hoveredCell.hours} jam) · {hoveredCell.pages} sesi dibaca
+						{:else}
+							Tidak ada aktivitas membaca
+						{/if}
+					</span>
+				{:else}
+					<span style="color: var(--muted);">Arahkan kursor ke kotak untuk melihat rincian jam baca per hari</span>
+				{/if}
+			</div>
+
+			<div class="calendar-legend">
+				<span>Kurang</span>
+				<div class="calendar-legend-cells">
+					<span class="calendar-legend-cell cal-level-0" title="0 menit"></span>
+					<span class="calendar-legend-cell cal-level-1" title="≤ 15 menit"></span>
+					<span class="calendar-legend-cell cal-level-2" title="16 - 45 menit"></span>
+					<span class="calendar-legend-cell cal-level-3" title="46 - 90 menit"></span>
+					<span class="calendar-legend-cell cal-level-4" title="> 90 menit (paling pekat)"></span>
+				</div>
+				<span>Lebih lama</span>
+			</div>
+		</div>
+	</article>
+
 	{#if sessions.length}
 		<div class="chart-grid">
 			<article class="chart-panel chart-panel--wide">

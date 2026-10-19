@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -74,7 +75,95 @@ function migrateLegacyLibrary(): void {
 	writeSetting('legacy_library_imported', 'true');
 }
 
+function cleanBookmarksAndNormalizeDatabase(): void {
+	if (settingExists('bookmarks_cleaned_v2')) return;
+	try {
+		const bookRows = database.prepare('SELECT id, data FROM books').all() as {
+			id: string;
+			data: string;
+		}[];
+		const sessionRows = database.prepare('SELECT data FROM reading_sessions').all() as {
+			data: string;
+		}[];
+
+		const earliestSessionByBook = new Map<string, number>();
+		for (const row of sessionRows) {
+			try {
+				const s = JSON.parse(row.data);
+				if (s.bookId && Number.isFinite(s.startTime) && s.startTime > 0) {
+					const cur = earliestSessionByBook.get(s.bookId);
+					if (!cur || s.startTime < cur) earliestSessionByBook.set(s.bookId, s.startTime);
+				}
+			} catch {}
+		}
+
+		inTransaction(() => {
+			const update = database.prepare('UPDATE books SET data = ? WHERE id = ?');
+			for (const row of bookRows) {
+				try {
+					const book = JSON.parse(row.data);
+					let changed = false;
+
+					if (Array.isArray(book.highlights)) {
+						const cleaned = [];
+						for (const h of book.highlights) {
+							const text = String(h.text ?? '').trim();
+							if (!text) continue;
+							const isBookmark =
+								/^in \d+$/i.test(text) ||
+								/^in chapter/i.test(text) ||
+								/^🔖\s*bookmark/i.test(text) ||
+								/^bookmark\b/i.test(text) ||
+								/^page \d+/i.test(text) ||
+								/^hal(aman)?\s*\.?\s*\d+/i.test(text);
+							if (isBookmark) {
+								changed = true;
+								continue;
+							}
+							const id =
+								h.id ||
+								createHash('sha1')
+									.update(`${book.id}:${h.page ?? ''}:${h.createdAt ?? ''}:${text}`)
+									.digest('hex')
+									.slice(0, 16);
+							cleaned.push({
+								...h,
+								id,
+								visible: h.visible !== false
+							});
+						}
+						book.highlights = cleaned;
+						changed = true;
+					}
+
+					const earliest = earliestSessionByBook.get(book.id);
+					if (earliest) {
+						const earliestIso = new Date(earliest * 1000).toISOString();
+						if (!book.startedAt || new Date(earliestIso).getTime() < new Date(book.startedAt).getTime()) {
+							book.startedAt = earliestIso;
+							changed = true;
+						}
+					}
+
+					if (book.status === 'finished' && !book.finishedAt) {
+						book.finishedAt = book.lastReadAt || new Date().toISOString();
+						changed = true;
+					}
+
+					if (changed) {
+						update.run(JSON.stringify(book), row.id);
+					}
+				} catch {}
+			}
+			writeSetting('bookmarks_cleaned_v2', 'true');
+		});
+	} catch (e) {
+		console.error('Migration cleanBookmarksAndNormalizeDatabase error:', e);
+	}
+}
+
 migrateLegacyLibrary();
+cleanBookmarksAndNormalizeDatabase();
 
 export function getSetting(key: string): string | undefined {
 	const row = database.prepare('SELECT value FROM settings WHERE key = ?').get(key) as {
@@ -127,7 +216,14 @@ export function saveReadingSessions(sessions: { id: string }[]): void {
 export function saveBooks(books: { id: string }[]): void {
 	return inTransaction(() => {
 		database.exec('DELETE FROM books');
-		const insert = database.prepare('INSERT INTO books (id, data) VALUES (?, ?)');
-		for (const book of books) insert.run(book.id, JSON.stringify(book));
+		const insert = database.prepare(
+			'INSERT INTO books (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data'
+		);
+		const seen = new Set<string>();
+		for (const book of books) {
+			if (!book.id || seen.has(book.id)) continue;
+			seen.add(book.id);
+			insert.run(book.id, JSON.stringify(book));
+		}
 	});
 }
