@@ -55,7 +55,16 @@ export const PATCH: RequestHandler = async ({ request }) => {
 				}
 				if (body.startedAt) book.startedAt = String(body.startedAt);
 				if (body.finishedAt !== undefined) book.finishedAt = body.finishedAt ? String(body.finishedAt) : undefined;
-				if (body.status) book.status = body.status;
+				if (body.status && ['reading', 'finished', 'paused'].includes(body.status)) {
+					book.status = body.status;
+					if (body.status === 'finished') {
+						// ditandai selesai secara manual: catat tanggal tamat bila belum ada
+						if (body.finishedAt === undefined && !book.finishedAt) book.finishedAt = new Date().toISOString();
+					} else if (body.finishedAt === undefined) {
+						// dibatalkan: hapus tanggal tamat
+						book.finishedAt = undefined;
+					}
+				}
 
 				if (body.highlightId && body.highlight) {
 					const hl = book.highlights?.find((h) => h.id === body.highlightId);

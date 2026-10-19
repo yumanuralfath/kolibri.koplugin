@@ -1,0 +1,146 @@
+name: Release plugin KOReader
+
+on:
+  # Manual: Actions → "Release plugin KOReader" → Run workflow → isi versi
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versi rilis, tanpa awalan v (contoh: 1.0.0 atau 1.1.0-beta.1)"
+        required: true
+        type: string
+      prerelease:
+        description: "Tandai sebagai pre-release"
+        required: false
+        default: false
+        type: boolean
+  # Otomatis: git tag v1.0.0 && git push origin v1.0.0
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build zip & buat release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Tentukan versi
+        id: v
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            PRERELEASE="false"
+          else
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+            PRERELEASE="${{ inputs.prerelease }}"
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Versi '$VERSION' tidak valid. Gunakan format seperti 1.0.0 atau 1.1.0-beta.1"
+            exit 1
+          fi
+          # versi dengan akhiran (-beta.1, -rc.1, dst.) otomatis dianggap pre-release
+          if [[ "$VERSION" == *-* ]]; then PRERELEASE="true"; fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Versi: $VERSION (pre-release: $PRERELEASE)"
+
+      - name: Pastikan rilis belum ada
+        if: github.ref_type != 'tag'
+        shell: bash
+        run: |
+          if gh release view "${{ steps.v.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Release ${{ steps.v.outputs.tag }} sudah ada. Pakai nomor versi lain."
+            exit 1
+          fi
+
+      - name: Siapkan plugin dan zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Kolibri.koplugin/main.lua  || { echo "::error::Kolibri.koplugin/main.lua tidak ditemukan"; exit 1; }
+          test -f Kolibri.koplugin/_meta.lua || { echo "::error::Kolibri.koplugin/_meta.lua tidak ditemukan"; exit 1; }
+
+          mkdir -p dist
+          cp -r Kolibri.koplugin dist/Kolibri.koplugin
+
+          # Cantumkan versi di _meta.lua (hanya di salinan untuk zip, repo tidak diubah)
+          sed -i 's|^\(\s*\)name = "kolibri",|&\n\1version = "${{ steps.v.outputs.version }}",|' dist/Kolibri.koplugin/_meta.lua
+          grep -q 'version = "${{ steps.v.outputs.version }}"' dist/Kolibri.koplugin/_meta.lua \
+            || { echo "::error::Gagal menyisipkan versi ke _meta.lua"; exit 1; }
+
+          # Folder di dalam zip harus bernama Kolibri.koplugin agar langsung bisa disalin ke koreader/plugins/
+          cd dist
+          zip -rq "Kolibri.koplugin-v${{ steps.v.outputs.version }}.zip" Kolibri.koplugin \
+            -x "*.DS_Store" "*/.git*" "*/__MACOSX/*"
+          cp "Kolibri.koplugin-v${{ steps.v.outputs.version }}.zip" Kolibri.koplugin.zip
+
+          echo "Isi zip:"
+          unzip -l Kolibri.koplugin.zip
+          unzip -l Kolibri.koplugin.zip | grep -q "Kolibri.koplugin/main.lua"
+
+      - name: Tulis catatan rilis
+        shell: bash
+        run: |
+          cat > dist/NOTES.md <<'NOTES'
+          ## Cara pasang di Kindle (KOReader)
+
+          1. Unduh **`Kolibri.koplugin.zip`** di bawah (bagian *Assets*).
+          2. Ekstrak zip. Hasilnya satu folder bernama `Kolibri.koplugin`.
+          3. Sambungkan Kindle ke komputer lewat USB, lalu salin folder `Kolibri.koplugin` ke `koreader/plugins/` di penyimpanan Kindle.
+             Jika sudah ada versi lama, timpa folder tersebut.
+          4. Keluarkan Kindle dengan aman, buka ulang KOReader (**Menu → Exit/Restart**).
+          5. Buka **Tools → Kolibri**, isi **Server → URL / Password**, lalu tekan **Test connection**.
+
+          Pembaruan: ulangi langkah 1–4. Pengaturan server tidak hilang karena disimpan terpisah dari folder plugin.
+
+          ---
+          NOTES
+
+      - name: Buat GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            "${{ steps.v.outputs.tag }}"
+            "dist/Kolibri.koplugin-v${{ steps.v.outputs.version }}.zip"
+            "dist/Kolibri.koplugin.zip"
+            --title "Kolibri v${{ steps.v.outputs.version }}"
+            --notes-file dist/NOTES.md
+            --generate-notes
+          )
+          # Pada trigger manual, tag dibuat otomatis dari commit yang sedang dijalankan
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            ARGS+=(--target "${GITHUB_SHA}")
+          fi
+          if [[ "${{ steps.v.outputs.prerelease }}" == "true" ]]; then
+            ARGS+=(--prerelease)
+          else
+            ARGS+=(--latest)
+          fi
+          gh release create "${ARGS[@]}"
+
+      - name: Ringkasan
+        shell: bash
+        run: |
+          {
+            echo "### Release v${{ steps.v.outputs.version }} berhasil dibuat"
+            echo ""
+            echo "- Halaman rilis: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.v.outputs.tag }}"
+            echo "- Unduhan terbaru (tautan tetap): ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/Kolibri.koplugin.zip"
+          } >> "$GITHUB_STEP_SUMMARY"

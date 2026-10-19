@@ -2230,3 +2230,61 @@ a {
 	opacity: 0.5;
 	cursor: wait;
 }
+
+/* Kontrol status baca di dialog buku (admin) */
+.status-control {
+	display: grid;
+	gap: 6px;
+	margin-top: 10px;
+}
+.status-control-label {
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+.status-switch {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.status-switch-btn {
+	height: 30px;
+	padding: 0 12px;
+	border: 1px solid var(--line);
+	border-radius: 15px;
+	background: var(--paper-subtle);
+	color: var(--ink);
+	font-size: 12px;
+	cursor: pointer;
+}
+.status-switch-btn:hover:not(:disabled):not(.active) {
+	border-color: var(--muted);
+}
+.status-switch-btn.active {
+	border-color: var(--green);
+	background: var(--green);
+	color: #fff;
+	font-weight: 600;
+}
+.status-switch-btn:disabled {
+	opacity: 0.6;
+	cursor: wait;
+}
+.status-date {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.status-date input {
+	height: 30px;
+	padding: 0 8px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--input-bg);
+	color: var(--ink);
+	font: inherit;
+}

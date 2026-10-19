@@ -37,6 +37,12 @@ export type HeatWeek = { cells: (HeatCell | null)[]; month?: string };
 
 const DAY_MS = 86_400_000;
 
+/** KOReader mengisi "N/A" bila metadata penulis kosong. */
+export function isKnownAuthor(name: string): boolean {
+	const n = name.trim();
+	return n.length > 0 && !/^(n\/?a|unknown|tidak diketahui|-+|—)$/i.test(n);
+}
+
 function pad(n: number): string {
 	return String(n).padStart(2, '0');
 }
@@ -195,7 +201,7 @@ export function computeStats(books: StatBook[], sessions: StatSession[], now = n
 	const authorMap = new Map<string, { books: number; seconds: number; finished: number }>();
 	for (const b of books) {
 		const sec = Math.max(b.totalReadTime ?? 0, bookSeconds.get(b.id) ?? 0);
-		for (const name of b.authors.length ? b.authors : []) {
+		for (const name of b.authors.filter(isKnownAuthor)) {
 			const a = authorMap.get(name) ?? { books: 0, seconds: 0, finished: 0 };
 			a.books++;
 			a.seconds += sec;

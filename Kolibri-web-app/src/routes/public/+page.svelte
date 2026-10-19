@@ -7,7 +7,7 @@
 	import Pagination from '../../lib/components/m3/Pagination.svelte';
 	import ThemeSwitch from '../../lib/components/m3/ThemeSwitch.svelte';
 	import InsightsPanel from '../../lib/components/m3/InsightsPanel.svelte';
-	import { computeStats, formatHours } from '../../lib/stats';
+	import { computeStats, formatHours, isKnownAuthor } from '../../lib/stats';
 	import { formatDateOnly, formatDateTime, formatDuration, getReadingDaysCount } from '../../lib/utils';
 
 	type Highlight = { id?: string; text: string; note?: string; page?: number; createdAt?: string };
@@ -38,22 +38,9 @@
 	// ---------- util ----------
 	const statusLabel = { finished: 'Selesai', reading: 'Sedang dibaca', paused: 'Dijeda' } as const;
 	const time = (iso?: string) => (iso ? Date.parse(iso) || 0 : 0);
-	const authorsOf = (b: Book) => b.authors.join(', ') || 'Penulis tidak diketahui';
-
-	function relative(iso?: string): string {
-		const t = time(iso);
-		if (!t) return '—';
-		const diff = Math.max(0, Date.now() - t);
-		const min = Math.floor(diff / 60_000);
-		if (min < 1) return 'baru saja';
-		if (min < 60) return `${min} menit lalu`;
-		const h = Math.floor(min / 60);
-		if (h < 24) return `${h} jam lalu`;
-		const d = Math.floor(h / 24);
-		if (d < 30) return `${d} hari lalu`;
-		const mo = Math.floor(d / 30);
-		return mo < 12 ? `${mo} bulan lalu` : `${Math.floor(mo / 12)} tahun lalu`;
-	}
+	const authorsOf = (b: Book) => b.authors.filter(isKnownAuthor).join(', ') || 'Penulis tidak diketahui';
+	// Buku yang ditandai selesai selalu tampil 100%, walau halaman terakhir di KOReader belum di ujung.
+	const pct = (b: Book) => (b.status === 'finished' ? 100 : (b.progress ?? 0));
 
 	let scrolled = $state(false);
 
@@ -87,7 +74,7 @@
 			return time(b.lastReadAt) - time(a.lastReadAt);
 		},
 		oldest: (a, b) => time(a.lastReadAt) - time(b.lastReadAt),
-		progress: (a, b) => (b.progress ?? 0) - (a.progress ?? 0) || time(b.lastReadAt) - time(a.lastReadAt),
+		progress: (a, b) => pct(b) - pct(a) || time(b.lastReadAt) - time(a.lastReadAt),
 		time: (a, b) => (b.totalReadTime ?? 0) - (a.totalReadTime ?? 0) || time(b.lastReadAt) - time(a.lastReadAt)
 	};
 
@@ -101,13 +88,6 @@
 	let bookPages = $derived(Math.max(1, Math.ceil(filteredBooks.length / bookPerPage)));
 	let pagedBooks = $derived(
 		filteredBooks.slice((Math.min(bookPage, bookPages) - 1) * bookPerPage, Math.min(bookPage, bookPages) * bookPerPage)
-	);
-
-	let readingNow = $derived(
-		books
-			.filter((b) => b.status === 'reading')
-			.sort((a, b) => time(b.lastReadAt) - time(a.lastReadAt))
-			.slice(0, 3)
 	);
 
 	const filters = $derived<{ id: Filter; label: string; count: number }[]>([
@@ -235,32 +215,6 @@
 				</div>
 			</section>
 
-			<!-- ===== Sedang dibaca ===== -->
-			{#if readingNow.length}
-				<section class="md-section" aria-labelledby="now-title">
-					<div class="md-section-head">
-						<h2 id="now-title" class="md-title-l">Sedang dibaca</h2>
-					</div>
-					<div class="now-grid">
-						{#each readingNow as b (b.id)}
-							<button type="button" class="now md-card md-state" onclick={() => openBook(b.id)}>
-								<span class="now-cover">
-									{#if b.coverUrl}<img src={b.coverUrl} alt="" loading="lazy" />{:else}<span class="ph">{b.title.slice(0, 1)}</span>{/if}
-								</span>
-								<span class="now-body">
-									<span class="md-title-m clamp-2">{b.title}</span>
-									<span class="md-body-s md-variant clamp-1">{authorsOf(b)}</span>
-									<span class="md-progress now-progress"><span style="width: {b.progress}%"></span></span>
-									<span class="md-body-s md-variant md-num">
-										{b.progress}% · hlm {b.currentPage}{b.totalPages ? `/${b.totalPages}` : ''} · {relative(b.lastReadAt)}
-									</span>
-								</span>
-							</button>
-						{/each}
-					</div>
-				</section>
-			{/if}
-
 			<!-- ===== Statistik ===== -->
 			<section class="md-section" aria-labelledby="stats-title">
 				<div class="md-section-head">
@@ -333,7 +287,7 @@
 											</span>
 										{/if}
 									</span>
-									<span class="book-meta">
+									<span class="book-info">
 										<span class="badges">
 											<span class="md-badge md-badge--{b.status}">
 												<Icon name={b.status === 'finished' ? 'checkCircle' : b.status === 'paused' ? 'pause' : 'book'} size={14} />
@@ -345,9 +299,9 @@
 										</span>
 										<span class="md-title-s clamp-2">{b.title}</span>
 										<span class="md-body-s md-variant clamp-1">{authorsOf(b)}</span>
-										<span class="md-progress"><span style="width: {b.progress}%"></span></span>
+										<span class="md-progress"><span style="width: {pct(b)}%"></span></span>
 										<span class="md-body-s md-variant md-num line">
-											<span>{b.progress}%</span>
+											<span>{pct(b)}%</span>
 											<span>hlm {b.currentPage}{b.totalPages ? `/${b.totalPages}` : ''}</span>
 											{#if b.totalReadTime}<span>{formatDuration(b.totalReadTime)}</span>{/if}
 										</span>
@@ -435,7 +389,7 @@
 						<ul class="quote-grid">
 							{#each pagedQuotes as q (q.key)}
 								<li class="quote md-card md-card--filled">
-									<span class="quote-mark"><Icon name="quote" size={20} /></span>
+									<span class="q-icon"><Icon name="quote" size={20} /></span>
 									<blockquote class="md-body-l">{q.text}</blockquote>
 									{#if q.note}
 										<p class="note md-body-m"><Icon name="note" size={16} /><span>{q.note}</span></p>
@@ -503,9 +457,9 @@
 				<div class="dlg-progress md-card">
 					<div class="line-between">
 						<span class="md-title-s">Halaman {selected.currentPage}{selected.totalPages ? ` dari ${selected.totalPages}` : ''}</span>
-						<span class="md-title-s md-num">{selected.progress}%</span>
+						<span class="md-title-s md-num">{pct(selected)}%</span>
 					</div>
-					<div class="md-progress"><span style="width: {selected.progress}%"></span></div>
+					<div class="md-progress"><span style="width: {pct(selected)}%"></span></div>
 					<span class="md-body-s md-variant">
 						{selected.totalReadPages ?? selected.currentPage} halaman tercatat dibaca
 						{#if selectedInfo.eta > 0} · perkiraan {formatHours(selectedInfo.eta)} lagi untuk tamat{/if}
@@ -579,30 +533,6 @@
 		margin: 12px 0 20px;
 	}
 
-	/* sedang dibaca */
-	.now-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-		gap: 12px;
-	}
-	.now {
-		display: flex;
-		gap: 16px;
-		padding: 12px;
-		border: 0;
-		text-align: left;
-		cursor: pointer;
-		background: var(--md-surface-container);
-	}
-	.now-cover {
-		flex: none;
-		width: 72px;
-		aspect-ratio: 2 / 3;
-		border-radius: var(--md-shape-s);
-		overflow: hidden;
-		background: var(--md-primary-container);
-	}
-	.now-cover img,
 	.cover img,
 	.dlg-cover img {
 		display: block;
@@ -618,16 +548,6 @@
 		color: var(--md-on-primary-container);
 		font-size: 24px;
 		font-weight: 500;
-	}
-	.now-body {
-		display: grid;
-		flex: 1;
-		min-width: 0;
-		align-content: center;
-		gap: 4px;
-	}
-	.now-progress {
-		margin: 8px 0 4px;
 	}
 
 	/* toolbar */
@@ -661,6 +581,10 @@
 		padding: 0;
 		list-style: none;
 	}
+	.book-grid > li,
+	.quote-grid > li {
+		min-width: 0;
+	}
 	.book {
 		display: grid;
 		width: 100%;
@@ -690,7 +614,7 @@
 		color: var(--md-on-primary-container);
 		text-align: center;
 	}
-	.book-meta {
+	.book-info {
 		display: grid;
 		gap: 4px;
 		padding: 0 4px 4px;
@@ -701,7 +625,7 @@
 		gap: 4px;
 		margin-bottom: 4px;
 	}
-	.book-meta .md-progress {
+	.book-info .md-progress {
 		margin: 6px 0 2px;
 	}
 	.line {
@@ -726,7 +650,7 @@
 		padding: 20px;
 		background: var(--md-surface-low);
 	}
-	.quote-mark {
+	.q-icon {
 		display: grid;
 		width: 36px;
 		height: 36px;
@@ -900,8 +824,7 @@
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 16px 8px;
 		}
-		.quote-grid,
-		.now-grid {
+		.quote-grid {
 			grid-template-columns: 1fr;
 		}
 		.dlg-head {

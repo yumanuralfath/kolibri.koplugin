@@ -468,7 +468,17 @@
 		gap: 12px;
 		margin-bottom: 6px;
 	}
+	.rank-grid > section,
+	.rank li,
+	.tile {
+		min-width: 0;
+	}
+	.rank-row > :last-child {
+		flex: none;
+		white-space: nowrap;
+	}
 	.rank-name {
+		flex: 1;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;

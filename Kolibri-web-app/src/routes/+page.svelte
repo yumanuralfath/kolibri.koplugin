@@ -273,6 +273,8 @@
 		visible?: boolean;
 		coverUrl?: string | null;
 		published?: boolean;
+		status?: 'reading' | 'finished' | 'paused';
+		finishedAt?: string;
 	}) {
 		pending = patch.bookId ?? 'publish';
 		try {
@@ -413,6 +415,24 @@
 		newAdminPassword = '';
 		newAdminPasswordConfirm = '';
 		successMessage = 'Password berhasil diganti. Gunakan password baru di KOReader.';
+	}
+
+	function toDateInput(iso?: string): string {
+		if (!iso) return '';
+		const d = new Date(iso);
+		if (isNaN(d.getTime())) return '';
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+	}
+
+	async function setStatus(book: Book, status: Book['status']) {
+		if (book.status === status) return;
+		await save({ bookId: book.id, status });
+	}
+
+	async function setFinishedDate(book: Book, value: string) {
+		if (!value) return;
+		// pukul 12 siang lokal agar tanggal tidak bergeser karena zona waktu
+		await save({ bookId: book.id, finishedAt: new Date(`${value}T12:00:00`).toISOString() });
 	}
 
 	async function findCovers(book: Book) {
@@ -1086,6 +1106,34 @@
 									>
 										{selectedBook.visible ? '◉ Ditampilkan di Rak Publik' : '○ Disembunyikan dari Publik'}
 									</button>
+									<div class="status-control" role="group" aria-label="Status baca">
+										<span class="status-control-label">Status baca</span>
+										<div class="status-switch">
+											{#each [['reading', 'Sedang dibaca'], ['paused', 'Dijeda'], ['finished', '✓ Selesai']] as [value, label] (value)}
+												<button
+													type="button"
+													class="status-switch-btn"
+													class:active={selectedBook.status === value}
+													aria-pressed={selectedBook.status === value}
+													disabled={pending === selectedBook.id}
+													onclick={() => setStatus(selectedBook, value as Book['status'])}
+												>
+													{label}
+												</button>
+											{/each}
+										</div>
+										{#if selectedBook.status === 'finished'}
+											<label class="status-date">
+												<span>Tanggal tamat</span>
+												<input
+													type="date"
+													value={toDateInput(selectedBook.finishedAt ?? selectedBook.lastReadAt)}
+													max={toDateInput(new Date().toISOString())}
+													onchange={(e) => setFinishedDate(selectedBook, e.currentTarget.value)}
+												/>
+											</label>
+										{/if}
+									</div>
 									<button
 										type="button"
 										class="book-delete-btn"
