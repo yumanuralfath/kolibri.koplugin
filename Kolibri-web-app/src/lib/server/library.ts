@@ -1,10 +1,26 @@
-import { getBooks, getSetting, saveBooks, setSetting } from './database';
+import {
+	getBooks,
+	getReadingSessions,
+	getSetting,
+	saveBooks,
+	saveReadingSessions,
+	setSetting
+} from './database';
 
 export type Highlight = {
 	text: string;
 	note?: string;
 	page?: number;
 	createdAt?: string;
+};
+
+export type ReadingSession = {
+	id: string;
+	bookId: string;
+	page: number;
+	startTime: number;
+	duration: number;
+	totalPages: number;
 };
 
 export type Book = {
@@ -16,6 +32,8 @@ export type Book = {
 	totalPages: number;
 	currentPage: number;
 	progress: number;
+	totalReadPages?: number;
+	totalReadTime?: number;
 	status: 'reading' | 'finished' | 'paused';
 	startedAt?: string;
 	lastReadAt: string;
@@ -27,6 +45,7 @@ export type Book = {
 
 export type Library = {
 	books: Book[];
+	readingSessions: ReadingSession[];
 	published: boolean;
 	publishId?: string;
 };
@@ -34,9 +53,14 @@ export type Library = {
 export function readLibrary(): Library {
 	return {
 		books: getBooks().map((book) => JSON.parse(book) as Book),
+		readingSessions: getReadingSessions().map((session) => JSON.parse(session) as ReadingSession),
 		published: getSetting('published') === 'true',
 		publishId: getSetting('publishId')
 	};
+}
+
+export function saveIncomingSessions(sessions: ReadingSession[]): void {
+	saveReadingSessions(sessions);
 }
 
 export function updateLibrary(update: (library: Library) => void | Promise<void>): Library {

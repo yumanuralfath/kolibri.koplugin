@@ -2,11 +2,12 @@ local InputDialog = require("ui/widget/inputdialog")
 local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local DataStorage = require("datastorage")
 local _ = require("gettext")
 
 local Kolibri = WidgetContainer:extend {
     name = "kolibri",
-    fullname = _("Kolibri reading statistics"),
+    fullname = _("Kolibri"),
     description = _("Sync reading progress and highlights to Kolibri."),
 }
 
@@ -149,6 +150,65 @@ function Kolibri:getHighlights()
     return highlights
 end
 
+function Kolibri:getStatisticsSnapshot()
+    local ok, result = pcall(function()
+        local reader_ok, ReaderUI = pcall(require, "apps/reader/readerui")
+        if reader_ok and ReaderUI and ReaderUI.instance then
+            local reader = ReaderUI.instance
+            if reader.statistics and reader.statistics.is_doc then
+                pcall(function() reader.statistics:insertDB() end)
+            end
+        end
+
+        local SQLite = require("lua-ljsqlite3/init")
+        local database_path = DataStorage:getSettingsDir() .. "/statistics.sqlite3"
+        local connection = SQLite.open(database_path)
+
+        local book_result, book_count = connection:exec("SELECT * FROM book")
+        local books = {}
+        local md5_by_id = {}
+        for index = 1, book_count do
+            local id = tonumber(book_result[1][index])
+            local book = {
+                id = book_result[10][index],
+                title = book_result[2][index],
+                authors = book_result[3][index],
+                notes = tonumber(book_result[4][index]) or 0,
+                last_open = tonumber(book_result[5][index]) or 0,
+                highlights = tonumber(book_result[6][index]) or 0,
+                pages = tonumber(book_result[7][index]) or 0,
+                series = book_result[8][index],
+                language = book_result[9][index],
+                total_read_time = tonumber(book_result[11][index]) or 0,
+                total_read_pages = tonumber(book_result[12][index]) or 0,
+            }
+            books[#books + 1] = book
+            md5_by_id[id] = book.id
+        end
+
+        local stats_result, stats_count = connection:exec("SELECT * FROM page_stat_data")
+        local stats = {}
+        for index = 1, stats_count do
+            local book_id = tonumber(stats_result[1][index])
+            local book_md5 = md5_by_id[book_id]
+            if book_md5 then
+                stats[#stats + 1] = {
+                    book_md5 = book_md5,
+                    page = tonumber(stats_result[2][index]) or 0,
+                    start_time = tonumber(stats_result[3][index]) or 0,
+                    duration = tonumber(stats_result[4][index]) or 0,
+                    total_pages = tonumber(stats_result[5][index]) or 0,
+                }
+            end
+        end
+        connection:close()
+        return { books = books, stats = stats }
+    end)
+
+    if ok then return result end
+    return { books = {}, stats = {} }
+end
+
 function Kolibri:getBookPayload()
     if not self.ui or not self.ui.document then
         return nil
@@ -162,7 +222,18 @@ function Kolibri:getBookPayload()
     end
     local total_pages = tonumber(document:getPageCount()) or 0
     local current_page = tonumber(document:getCurrentPage()) or 0
-    local book_id = asString(props.md5 or props.partial_md5 or filename)
+    local snapshot = self:getStatisticsSnapshot()
+    local sidecar_md5
+    if self.ui and self.ui.doc_settings then
+        sidecar_md5 = self.ui.doc_settings:readSetting("partial_md5_checksum")
+    end
+    local book_id = asString(sidecar_md5 or props.md5 or props.partial_md5 or filename)
+    for _, book in ipairs(snapshot.books) do
+        if book.title == title then
+            book_id = book.id
+            break
+        end
+    end
     book_id = book_id:gsub("[^%w_%-]", "_")
 
     local rapidjson = require("rapidjson")
@@ -176,6 +247,8 @@ function Kolibri:getBookPayload()
             currentPage = current_page,
             totalPages = total_pages,
         },
+        books = snapshot.books,
+        stats = snapshot.stats,
         highlights = self:getHighlights(),
     })
 end

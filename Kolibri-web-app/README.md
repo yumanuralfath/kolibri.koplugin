@@ -7,7 +7,7 @@ Kolibri is a private reading dashboard for KOReader. The KOReader plugin sends b
 1. Start the app with `bun run dev -- --host 0.0.0.0`.
 2. Open the app in a browser and create an admin password (at least 12 characters). This setup screen is only available before the first password is saved.
 3. In KOReader, install the sibling `Kolibri.koplugin` folder. Set the server URL to the computer's LAN address, such as `http://192.168.1.10:5173`, and set the same admin password in the plugin.
-4. Open a book. The plugin automatically queues sync until KOReader is online, retries when network connectivity returns, and checks again periodically while reading. **Sync current book now** remains available as an optional manual action.
+4. Open a book. The plugin imports the KOReader statistics database's book catalog and page-reading history, then automatically queues sync until KOReader is online, retries when network connectivity returns, and checks again periodically while reading. **Sync current book now** remains available as an optional manual action.
 
 The plugin sends the admin password as a bearer credential. Use HTTPS outside a trusted network, and do not expose the development server directly to the public internet. Admin APIs use an HttpOnly, SameSite session cookie.
 
@@ -19,10 +19,10 @@ Each book's **Change cover** controls can search Open Library automatically or a
 
 ## API
 
-- `POST /api/sync` accepts `{ "book": { "id", "title", "authors", "currentPage", "totalPages" }, "highlights": [{ "text", "page", "note" }] }` with `Authorization: Bearer <admin-password>`.
+- `POST /api/sync` accepts the current `book`, the full KOReader `books` catalog, historical `stats` (`book_md5`, `page`, `start_time`, `duration`, `total_pages`), and current-book `highlights`, with `Authorization: Bearer <admin-password>`.
 - `GET /api/manage` and `PATCH /api/manage` require the admin session cookie.
 - The first `POST /api/auth` with `{ "setup": true, "password": "..." }` creates the admin account; later posts log in with the password.
 - `PATCH /api/auth` changes the admin password after verifying the current password; it rotates the session secret and renews the current admin session.
 - `GET /api/public/<id>` returns the visible public books only while Publish is enabled.
 
-The SQLite database is intended for a single app instance with a persistent writable disk. Back up `data/kolibri.sqlite` regularly. The database directory and file are restricted to the current user on Linux/macOS. The session signing secret is generated locally and stored in the database. If a previous installation has `data/library.json`, Kolibri imports it on the first database start. Runtime needs Node.js with `node:sqlite` support (Node.js 22.13 or newer); Bun can still be used for package management and development commands.
+The dashboard charts daily pages, monthly reading time, weekday patterns, active days, longest reading day, and pages-per-day from the imported history. KOReader exports `statistics.sqlite3` records (`book` and `page_stat_data`) on sync. The SQLite database is intended for a single app instance with a persistent writable disk. Back up `data/kolibri.sqlite` regularly. The database directory and file are restricted to the current user on Linux/macOS. The session signing secret is generated locally and stored in the database. If a previous installation has `data/library.json`, Kolibri imports it on the first database start. Runtime needs Node.js with `node:sqlite` support (Node.js 22.13 or newer); Bun can still be used for package management and development commands.

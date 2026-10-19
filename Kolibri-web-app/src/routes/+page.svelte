@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import ReadingAnalytics from '../lib/components/ReadingAnalytics.svelte';
 
 	type Highlight = { text: string; note?: string; page?: number; createdAt?: string };
 	type Book = {
@@ -10,16 +11,31 @@
 		totalPages: number;
 		currentPage: number;
 		progress: number;
+		totalReadPages?: number;
+		totalReadTime?: number;
 		status: 'reading' | 'finished' | 'paused';
 		lastReadAt: string;
 		coverUrl?: string;
 		visible: boolean;
 		highlights: Highlight[];
 	};
-	type Library = { books: Book[]; published: boolean; publishId?: string };
+	type ReadingSession = {
+		id: string;
+		bookId: string;
+		page: number;
+		startTime: number;
+		duration: number;
+		totalPages: number;
+	};
+	type Library = {
+		books: Book[];
+		readingSessions: ReadingSession[];
+		published: boolean;
+		publishId?: string;
+	};
 	type Cover = { title: string; author: string; url: string };
 
-	let library = $state<Library>({ books: [], published: false });
+	let library = $state<Library>({ books: [], readingSessions: [], published: false });
 	let authenticated = $state(false);
 	let setupRequired = $state(false);
 	let loading = $state(true);
@@ -44,7 +60,9 @@
 	let highlights = $derived(
 		library.books.reduce((total, book) => total + book.highlights.length, 0)
 	);
-	let pagesRead = $derived(library.books.reduce((total, book) => total + book.currentPage, 0));
+	let pagesRead = $derived(
+		library.books.reduce((total, book) => total + (book.totalReadPages ?? book.currentPage), 0)
+	);
 	let latestHighlights = $derived(
 		library.books
 			.flatMap((book) => book.highlights.map((highlight) => ({ ...highlight, title: book.title })))
@@ -163,7 +181,7 @@
 	async function logout() {
 		await fetch('/api/auth', { method: 'DELETE' });
 		authenticated = false;
-		library = { books: [], published: false };
+		library = { books: [], readingSessions: [], published: false };
 	}
 </script>
 
@@ -353,6 +371,8 @@
 				</div>
 			</section>
 
+			<ReadingAnalytics sessions={library.readingSessions ?? []} books={library.books} />
+
 			<div class="content-grid">
 				<section class="shelf-section">
 					<div class="section-heading">
@@ -409,6 +429,8 @@
 													? ` / ${book.totalPages.toLocaleString()} pages`
 													: ' pages'}</span
 											><span>{book.highlights.length} notes</span>
+											{#if book.totalReadTime}<span>{Math.round(book.totalReadTime / 60)} min</span
+												>{/if}
 										</div>
 										<details class="cover-editor">
 											<summary>Change cover</summary>

@@ -19,6 +19,10 @@ database.exec(`
 		id TEXT PRIMARY KEY,
 		data TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS reading_sessions (
+		id TEXT PRIMARY KEY,
+		data TEXT NOT NULL
+	);
 `);
 
 function settingExists(key: string): boolean {
@@ -101,6 +105,23 @@ export function getBooks(): string[] {
 	return (
 		database.prepare('SELECT data FROM books ORDER BY rowid ASC').all() as { data: string }[]
 	).map((row) => row.data);
+}
+
+export function getReadingSessions(): string[] {
+	return (
+		database.prepare('SELECT data FROM reading_sessions ORDER BY rowid ASC').all() as {
+			data: string;
+		}[]
+	).map((row) => row.data);
+}
+
+export function saveReadingSessions(sessions: { id: string }[]): void {
+	return inTransaction(() => {
+		const insert = database.prepare(
+			'INSERT INTO reading_sessions (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data'
+		);
+		for (const session of sessions) insert.run(session.id, JSON.stringify(session));
+	});
 }
 
 export function saveBooks(books: { id: string }[]): void {
