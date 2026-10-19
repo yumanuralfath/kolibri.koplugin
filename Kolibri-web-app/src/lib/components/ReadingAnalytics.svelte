@@ -13,6 +13,9 @@
 	};
 	type Book = { totalReadPages?: number; totalReadTime?: number };
 	let { sessions, books }: { sessions: ReadingSession[]; books: Book[] } = $props();
+	let dailyCanvas = $state<HTMLCanvasElement>();
+	let monthlyCanvas = $state<HTMLCanvasElement>();
+	let weekdayCanvas = $state<HTMLCanvasElement>();
 
 	function dayKey(date: Date): string {
 		return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -92,6 +95,7 @@
 	}
 
 	onMount(() => {
+		if (!dailyCanvas || !monthlyCanvas || !weekdayCanvas) return;
 		const shared = {
 			responsive: true,
 			maintainAspectRatio: false,
@@ -118,7 +122,7 @@
 				}
 			}
 		};
-		const dailyChart = new Chart('daily-reading-chart', {
+		const dailyChart = new Chart(dailyCanvas, {
 			type: 'line',
 			data: {
 				labels: aggregated.daily.map((item) => item.label),
@@ -146,7 +150,7 @@
 				}
 			}
 		});
-		const monthlyChart = new Chart('monthly-reading-chart', {
+		const monthlyChart = new Chart(monthlyCanvas, {
 			type: 'bar',
 			data: {
 				labels: aggregated.monthly.map((item) => item.label),
@@ -170,7 +174,7 @@
 				}
 			}
 		});
-		const weekdayChart = new Chart('weekday-reading-chart', {
+		const weekdayChart = new Chart(weekdayCanvas, {
 			type: 'bar',
 			data: {
 				labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
@@ -227,21 +231,21 @@
 					<h3>Pages read</h3>
 					<p>Daily activity · last 30 days</p>
 				</div>
-				<div class="chart-canvas"><canvas id="daily-reading-chart"></canvas></div>
+				<div class="chart-canvas"><canvas bind:this={dailyCanvas}></canvas></div>
 			</article>
 			<article class="chart-panel">
 				<div>
 					<h3>Reading time</h3>
 					<p>Hours by month · last 12 months</p>
 				</div>
-				<div class="chart-canvas"><canvas id="monthly-reading-chart"></canvas></div>
+				<div class="chart-canvas"><canvas bind:this={monthlyCanvas}></canvas></div>
 			</article>
 			<article class="chart-panel">
 				<div>
 					<h3>Your week</h3>
 					<p>Minutes by weekday</p>
 				</div>
-				<div class="chart-canvas"><canvas id="weekday-reading-chart"></canvas></div>
+				<div class="chart-canvas"><canvas bind:this={weekdayCanvas}></canvas></div>
 			</article>
 		</div>
 	{:else}

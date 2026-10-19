@@ -107,7 +107,7 @@ end
 
 function Kolibri:addToMainMenu(menu_items)
     menu_items.kolibri = {
-        text = _("Kolibri reading stats"),
+        text = _("Kolibri"),
         sorting_hint = "tools",
         sub_item_table = {
             {
