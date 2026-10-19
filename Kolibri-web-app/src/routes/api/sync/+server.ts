@@ -141,7 +141,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	let attachedHighlightsToAny = false;
 	const library = await updateLibrary((data) => {
 		for (const [bookId, metadata] of booksById) {
-			const existingIndex = data.books.findIndex((book) => book.id === bookId);
+			let existingIndex = data.books.findIndex((book) => book.id === bookId);
+			if (existingIndex < 0 && metadata.title) {
+				const normTitle = String(metadata.title).trim().toLowerCase();
+				existingIndex = data.books.findIndex(
+					(book) => book.title.trim().toLowerCase() === normTitle
+				);
+			}
 			const existing = existingIndex >= 0 ? data.books[existingIndex] : undefined;
 			const isCurrentBook = bookId === id;
 			if (isCurrentBook && incomingHighlights.length > 0) {
@@ -160,8 +166,19 @@ export const POST: RequestHandler = async ({ request }) => {
 				bookTotalPages > 0
 					? Math.min(100, Math.round((bookCurrentPage / bookTotalPages) * 100))
 					: (existing?.progress ?? 0);
+			const incomingStatus =
+				metadata.status === 'complete' || metadata.status === 'finished'
+					? 'finished'
+					: undefined;
 			const bookStatus: Book['status'] =
-				bookProgress >= 100 ? 'finished' : existing?.status === 'paused' ? 'paused' : 'reading';
+				incomingStatus ??
+				(bookProgress >= 100
+					? 'finished'
+					: existing?.status === 'finished'
+						? 'finished'
+						: existing?.status === 'paused'
+							? 'paused'
+							: 'reading');
 			const bookHighlights = cleanHighlights(metadata.highlights, bookId);
 			const highlightMap = new Map<string, Highlight>();
 			for (const hl of existing?.highlights ?? []) {

@@ -82,6 +82,16 @@ local function isBookmarkOnly(text)
     return false
 end
 
+local function highlightPage(ui, item)
+    local page = item.pageno or item.page
+    if tonumber(page) then return tonumber(page) end
+    if type(page) == "string" and ui and ui.document and ui.document.getPageFromXPointer then
+        local ok, number = pcall(function() return ui.document:getPageFromXPointer(page) end)
+        if ok and tonumber(number) then return tonumber(number) end
+    end
+    return nil
+end
+
 local function parseHighlightsFromEntries(raw_items, ui)
     local result = {}
     local seen = {}
@@ -141,37 +151,99 @@ local function parseHighlightsFromEntries(raw_items, ui)
     return result
 end
 
-local function scanHighlightsFromHistory()
+local function scanMetadataFromHistory()
     local highlightsByMd5 = {}
-    local historyPath = DataStorage:getSettingsDir() .. "/history.lua"
-    local history = loadLuaTable(historyPath)
-    if type(history) ~= "table" then return highlightsByMd5 end
+    local highlightsByTitle = {}
+    local statusByMd5 = {}
+    local statusByTitle = {}
+
+    local history = nil
+    local okHist, ReadHistory = pcall(require, "readhistory")
+    if okHist and ReadHistory and type(ReadHistory.hist) == "table" and #ReadHistory.hist > 0 then
+        history = ReadHistory.hist
+    end
+
+    if not history then
+        local candidates = {
+            DataStorage:getDataDir() .. "/history.lua",
+            DataStorage:getSettingsDir() .. "/history.lua",
+            DataStorage:getDataDir() .. "/settings/history.lua",
+        }
+        for _, path in ipairs(candidates) do
+            local tbl = loadLuaTable(path)
+            if type(tbl) == "table" and #tbl > 0 then
+                history = tbl
+                break
+            end
+        end
+    end
+
+    if type(history) ~= "table" then
+        return highlightsByMd5, highlightsByTitle, statusByMd5, statusByTitle
+    end
+
+    local okDoc, DocSettings = pcall(require, "docsettings")
 
     for _, entry in ipairs(history) do
         local file = entry.file
         if file and file ~= "" then
-            local ext = file:match("%.([^.]+)$")
-            if ext then
-                local sdrPath = file:gsub("%.[^.]+$", ".sdr") .. "/metadata." .. ext .. ".lua"
-                local meta = loadLuaTable(sdrPath)
-                if meta then
-                    local md5 = cleanId(meta.stats and meta.stats.md5 or meta.partial_md5_checksum or meta.doc_md5)
-                    local raw_entries = {}
-                    if type(meta.annotations) == "table" then
-                        for _, a in ipairs(meta.annotations) do raw_entries[#raw_entries + 1] = a end
+            local meta = nil
+            if okDoc and DocSettings and DocSettings.open then
+                local okOpen, ds = pcall(DocSettings.open, DocSettings, file)
+                if okOpen and ds and type(ds.data) == "table" then
+                    meta = ds.data
+                end
+            end
+
+            if not meta then
+                local ext = file:match("%.([^.]+)$")
+                if ext then
+                    local sdrPath = file:gsub("%.[^.]+$", ".sdr") .. "/metadata." .. ext .. ".lua"
+                    meta = loadLuaTable(sdrPath)
+                    if not meta then
+                        sdrPath = file:gsub("%.[^.]+$", ".sdr") .. "/metadata." .. ext:lower() .. ".lua"
+                        meta = loadLuaTable(sdrPath)
                     end
-                    if type(meta.bookmarks) == "table" then
-                        for _, b in ipairs(meta.bookmarks) do raw_entries[#raw_entries + 1] = b end
-                    end
-                    local hls = parseHighlightsFromEntries(raw_entries, nil)
-                    if #hls > 0 and md5 ~= "" then
-                        highlightsByMd5[md5] = hls
-                    end
+                end
+            end
+
+            if meta then
+                local md5 = cleanId(meta.stats and meta.stats.md5 or meta.partial_md5_checksum or meta.doc_md5)
+                local title = trim(meta.stats and meta.stats.title or (meta.doc_props and meta.doc_props.title) or meta.title)
+                local normTitle = title ~= "" and title:lower() or nil
+
+                local s = nil
+                if type(meta.summary) == "table" and meta.summary.status then
+                    s = meta.summary.status
+                elseif meta.status then
+                    s = meta.status
+                end
+                local status = (s == "complete" or s == "finished") and "finished" or nil
+                if status then
+                    if md5 ~= "" then statusByMd5[md5] = status end
+                    if normTitle then statusByTitle[normTitle] = status end
+                end
+
+                local raw_entries = {}
+                if type(meta.annotations) == "table" then
+                    for _, a in ipairs(meta.annotations) do raw_entries[#raw_entries + 1] = a end
+                end
+                if type(meta.bookmarks) == "table" then
+                    for _, b in ipairs(meta.bookmarks) do raw_entries[#raw_entries + 1] = b end
+                end
+                if type(meta.highlight) == "table" then
+                    for _, h in ipairs(meta.highlight) do raw_entries[#raw_entries + 1] = h end
+                end
+
+                local hls = parseHighlightsFromEntries(raw_entries, nil)
+                if #hls > 0 then
+                    if md5 ~= "" then highlightsByMd5[md5] = hls end
+                    if normTitle then highlightsByTitle[normTitle] = hls end
                 end
             end
         end
     end
-    return highlightsByMd5
+    return highlightsByMd5, highlightsByTitle, statusByMd5, statusByTitle
 end
 
 --- All books known to the statistics plugin.
@@ -182,15 +254,18 @@ function Stats.readBooks(conn)
     if not has_totals then
         result, count = query(conn, base .. ", 0, 0 FROM book")
     end
-    local highlightsByMd5 = scanHighlightsFromHistory()
+    local highlightsByMd5, highlightsByTitle, statusByMd5, statusByTitle = scanMetadataFromHistory()
     local books = {}
     for row = 1, count do
         local md5 = cleanId(result[10][row])
-        if md5 ~= "" then
-            local bookHighlights = highlightsByMd5[md5]
+        local title = asString(result[2][row])
+        local normTitle = trim(title):lower()
+        if md5 ~= "" or title ~= "" then
+            local bookHighlights = (md5 ~= "" and highlightsByMd5[md5]) or highlightsByTitle[normTitle]
+            local bookStatus = (md5 ~= "" and statusByMd5[md5]) or statusByTitle[normTitle]
             books[#books + 1] = {
-                id = md5,
-                title = asString(result[2][row]),
+                id = md5 ~= "" and md5 or cleanId(title),
+                title = title,
                 authors = asString(result[3][row]),
                 notes = tonumber(result[4][row]) or 0,
                 last_open = tonumber(result[5][row]) or 0,
@@ -200,6 +275,7 @@ function Stats.readBooks(conn)
                 language = asString(result[9][row]),
                 total_read_time = tonumber(result[11][row]) or 0,
                 total_read_pages = tonumber(result[12][row]) or 0,
+                status = bookStatus,
             }
         end
     end
@@ -317,6 +393,21 @@ function Stats.currentBook(ui, known_books)
     if title == "" then
         title = filename:match("([^/]+)%.[^./]+$") or filename:match("([^/]+)$") or "Untitled book"
     end
+    local currentStatus = nil
+    if ui and ui.doc_settings then
+        local summary = ui.doc_settings:readSetting("summary")
+        if type(summary) == "table" and summary.status then
+            currentStatus = summary.status
+        else
+            currentStatus = ui.doc_settings:readSetting("status")
+        end
+    end
+    if currentStatus == "complete" or currentStatus == "finished" then
+        currentStatus = "finished"
+    else
+        currentStatus = nil
+    end
+
     return {
         id = bookId(ui, props, filename, known_books),
         title = title,
@@ -325,17 +416,8 @@ function Stats.currentBook(ui, known_books)
         language = props.language,
         currentPage = currentPage(ui),
         totalPages = totalPages(ui),
+        status = currentStatus,
     }
-end
-
-local function highlightPage(ui, item)
-    local page = item.pageno or item.page
-    if tonumber(page) then return tonumber(page) end
-    if type(page) == "string" and ui and ui.document and ui.document.getPageFromXPointer then
-        local ok, number = pcall(function() return ui.document:getPageFromXPointer(page) end)
-        if ok and tonumber(number) then return tonumber(number) end
-    end
-    return nil
 end
 
 --- Highlights and notes of the open book.
