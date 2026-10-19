@@ -1,16 +1,36 @@
 # Kolibri KOReader plugin
 
-This plugin sends the KOReader statistics database's book list and page-reading history, plus the current book's progress and saved annotations, to a Kolibri web app. Sync is queued when a book opens, when network connectivity returns, and at most once every five minutes while reading. Use **Tools > Kolibri reading stats > Sync current book now** for an immediate upload. Sync imports the full statistics history, not only the currently opened book.
+Syncs your KOReader reading statistics, progress and highlights to a Kolibri web app — automatically whenever a network connection is available.
 
 ## Install
 
-Copy `Kolibri.koplugin` into the KOReader `koreader/plugins/` directory, then restart KOReader. On the device, open **Tools > Kolibri reading stats** and set:
+Copy the whole `Kolibri.koplugin` folder into `koreader/plugins/` and restart KOReader. Open **Tools → Kolibri** and set the server (**Server → URL / Password**), then press **Test connection**.
 
-- **Kolibri server URL**: the base URL of the running app, for example `http://192.168.1.10:5173`
-- **Kolibri password**: the same password used to sign in to the Kolibri admin dashboard
+- **URL**: base address of the app, e.g. `http://192.168.1.10:5173` (the `http://` prefix is added if you leave it out)
+- **Password**: the Kolibri admin password
 
-Use HTTPS when syncing across an untrusted network. The plugin stores your admin password in KOReader settings and sends it to the configured Kolibri server for authentication. Only configure a server URL you trust.
+Use HTTPS on untrusted networks; the password is stored in `settings/kolibri.lua` and sent as a bearer token.
 
-## Data sent
+## Menu
 
-The plugin posts JSON to `/api/sync` with the admin password as a bearer credential. It reads books and page sessions from `statistics.sqlite3`, and sends current-document annotations. The app merges sessions by book, page, and timestamp, and merges highlights by page and text, preserving library visibility and cover choices between syncs.
+| Item | What it does |
+| --- | --- |
+| **Status** | One-line summary; tap for the detailed status screen (connection, auto-sync, last sync, queue, last error) |
+| **Sync now** | Immediate sync (works from the file manager too). Offers to connect Wi-Fi if it is off |
+| **Auto sync when network is connected** | Master switch for all automatic syncing |
+| **Auto sync options** | Choose triggers: network connects · book opens · while reading · book closes. Minimum interval 5–60 min. Optional message after auto sync |
+| **Server** | URL, password, test connection |
+| **Advanced** | Full resync, clear error, sessions per request |
+
+A gesture action **Kolibri: sync now** is also registered (Settings → Taps and gestures).
+
+## How auto sync behaves
+
+- It never turns Wi-Fi on or shows a connect prompt by itself. If a trigger fires while offline, the work is marked pending and is uploaded when the network connects (or on the next 60 s check while a book is open).
+- Page turns only set a flag, so reading stays fast. The actual upload happens at most once per minimum interval.
+- Uploads are incremental (only new reading sessions, with a 24 h overlap that the server de-duplicates) and chunked, so large histories no longer hit the server's body-size limit or time out.
+- Failed syncs back off for 2 minutes (10 minutes for wrong password / missing config) and the reason is shown in the status screen.
+
+## Files
+
+`main.lua` events and timers · `kolibri_sync.lua` triggers, throttling, chunked upload · `kolibri_stats.lua` statistics DB and book/highlight reading · `kolibri_client.lua` HTTP and error messages · `kolibri_config.lua` settings · `kolibri_ui.lua` menu and status screen.

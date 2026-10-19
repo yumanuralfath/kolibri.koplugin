@@ -16,6 +16,12 @@ type SyncPayload = {
 	stats?: Record<string, unknown>[];
 };
 
+// KOReader's JSON encoder serialises an empty Lua table as `{}` instead of `[]`,
+// so every list from the plugin must be treated as untrusted.
+function asArray<T>(value: unknown): T[] {
+	return Array.isArray(value) ? (value as T[]) : [];
+}
+
 function cleanId(value: unknown): string {
 	return String(value ?? '')
 		.replace(/[^a-zA-Z0-9_-]/g, '')
@@ -50,23 +56,32 @@ function cleanHighlights(value: unknown): Highlight[] {
 export const POST: RequestHandler = async ({ request }) => {
 	if (!hasSyncPassword(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const payload = (await request.json().catch(() => null)) as SyncPayload | null;
-	const source = payload?.book;
+	if (!payload || typeof payload !== 'object') {
+		return json({ error: 'Invalid JSON body.' }, { status: 400 });
+	}
+	const incomingBooks = asArray<Record<string, unknown>>(payload.books);
+	const incomingStats = asArray<Record<string, unknown>>(payload.stats);
+	const source = payload.book;
 	const id = cleanId(source?.id);
 	const title = String(source?.title ?? '')
 		.trim()
 		.slice(0, 500);
-	if (!id || !title) return json({ error: 'Book id and title are required.' }, { status: 400 });
+	// A library-only sync (no book currently open) is valid as long as it carries data.
+	const hasCurrentBook = Boolean(id && title);
+	if (!hasCurrentBook && incomingBooks.length === 0 && incomingStats.length === 0) {
+		return json({ error: 'Book id and title are required.' }, { status: 400 });
+	}
 
 	const currentPage = Math.max(0, Number(source?.currentPage) || 0);
 	const now = new Date().toISOString();
 	const incomingHighlights = cleanHighlights(payload?.highlights);
 	const booksById = new Map<string, Record<string, unknown>>();
 	const latestPageByBook = new Map<string, { page: number; startTime: number }>();
-	for (const item of payload?.books ?? []) {
+	for (const item of incomingBooks) {
 		const bookId = cleanId(item.md5 ?? item.id);
 		if (bookId) booksById.set(bookId, item);
 	}
-	for (const session of payload?.stats ?? []) {
+	for (const session of incomingStats) {
 		const bookId = cleanId(session.book_md5 ?? session.bookId);
 		const page = Number(session.page);
 		const startTime = Number(session.start_time ?? session.startTime);
@@ -80,7 +95,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			latestPageByBook.set(bookId, { page, startTime });
 		}
 	}
-	if (source && id) booksById.set(id, { ...booksById.get(id), ...source, id });
+	if (source && hasCurrentBook) booksById.set(id, { ...booksById.get(id), ...source, id });
 
 	const library = await updateLibrary((data) => {
 		for (const [bookId, metadata] of booksById) {
@@ -144,7 +159,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			else data.books.push(book);
 		}
 	});
-	const sessions = (payload?.stats ?? [])
+	const sessions = incomingStats
 		.map((entry): ReadingSession | null => {
 			const bookId = cleanId(entry.book_md5 ?? entry.bookId);
 			const page = Number(entry.page);
@@ -165,6 +180,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		.filter((session): session is ReadingSession => session !== null);
 	saveIncomingSessions(sessions);
 	return json({
+		ok: true,
+		serverTime: now,
 		received: true,
 		books: library.books.length,
 		importedBooks: booksById.size,
