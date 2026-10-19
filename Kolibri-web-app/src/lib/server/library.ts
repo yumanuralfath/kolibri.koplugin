@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
+	deleteBookAndStats,
 	getBooks,
+	getDeletedBookIds,
 	getReadingSessions,
 	getSetting,
 	saveBooks,
@@ -103,4 +105,12 @@ export function updateLibrary(update: (library: Library) => void | Promise<void>
 
 export function safeBookId(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+}
+
+export function getDeletedBooks(): Set<string> {
+	return getDeletedBookIds();
+}
+
+export function deleteBook(bookId: string): { deletedSessions: number } {
+	return deleteBookAndStats(bookId);
 }

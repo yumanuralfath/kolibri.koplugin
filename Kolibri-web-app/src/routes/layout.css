@@ -2208,3 +2208,25 @@ a {
 	font-size: 11px;
 }
 
+
+/* Delete book button (detail modal) */
+.book-delete-btn {
+	margin-top: 8px;
+	margin-left: 6px;
+	padding: 4px 10px;
+	border: 1px solid #c4493a;
+	border-radius: 999px;
+	background: transparent;
+	color: #c4493a;
+	font: inherit;
+	font-size: 11px;
+	cursor: pointer;
+}
+.book-delete-btn:hover:not(:disabled) {
+	background: #c4493a;
+	color: #fff;
+}
+.book-delete-btn:disabled {
+	opacity: 0.5;
+	cursor: wait;
+}

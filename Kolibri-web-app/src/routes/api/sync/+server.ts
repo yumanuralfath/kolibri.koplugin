@@ -4,6 +4,7 @@ import { json } from '@sveltejs/kit';
 import { hasSyncPassword } from '../../../lib/server/auth';
 import {
 	createHighlightId,
+	getDeletedBooks,
 	isPageBookmark,
 	saveIncomingSessions,
 	updateLibrary,
@@ -78,14 +79,20 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!payload || typeof payload !== 'object') {
 		return json({ error: 'Invalid JSON body.' }, { status: 400 });
 	}
-	const incomingBooks = asArray<Record<string, unknown>>(payload.books);
-	const incomingStats = asArray<Record<string, unknown>>(payload.stats);
-	const incomingHighlights = [
-		...cleanHighlights(payload?.highlights),
-		...cleanHighlights(payload?.book?.highlights)
-	];
+	// Books deleted from the web app stay deleted: ignore them (and their stats/highlights) on every sync.
+	const deletedIds = getDeletedBooks();
+	const rawBooks = asArray<Record<string, unknown>>(payload.books);
+	const rawStats = asArray<Record<string, unknown>>(payload.stats);
+	const incomingBooks = rawBooks.filter((item) => !deletedIds.has(cleanId(item.md5 ?? item.id)));
+	const incomingStats = rawStats.filter(
+		(item) => !deletedIds.has(cleanId(item.book_md5 ?? item.bookId))
+	);
 	const source = payload.book;
 	const id = cleanId(source?.id);
+	const currentBookDeleted = Boolean(id) && deletedIds.has(id);
+	const incomingHighlights = currentBookDeleted
+		? []
+		: [...cleanHighlights(payload?.highlights), ...cleanHighlights(payload?.book?.highlights)];
 	const title = String(source?.title ?? '')
 		.trim()
 		.slice(0, 500);
@@ -97,7 +104,20 @@ export const POST: RequestHandler = async ({ request }) => {
 		);
 	} catch {}
 	// A library-only sync (no book currently open) is valid as long as it carries data.
-	const hasCurrentBook = Boolean(id && title);
+	const hasCurrentBook = Boolean(id && title) && !currentBookDeleted;
+	const hadDeletedData =
+		currentBookDeleted ||
+		rawBooks.length > incomingBooks.length ||
+		rawStats.length > incomingStats.length;
+	if (
+		!hasCurrentBook &&
+		hadDeletedData &&
+		incomingBooks.length === 0 &&
+		incomingStats.length === 0 &&
+		incomingHighlights.length === 0
+	) {
+		return json({ ok: true, serverTime: new Date().toISOString(), received: true, skippedDeleted: true });
+	}
 	if (
 		!hasCurrentBook &&
 		incomingBooks.length === 0 &&

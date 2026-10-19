@@ -52,3 +52,4 @@ export function getReadingDaysCount(startedAt?: string, endedAt?: string): numbe
 		return 1;
 	}
 }
+

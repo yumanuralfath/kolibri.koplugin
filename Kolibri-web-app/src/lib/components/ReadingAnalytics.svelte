@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteDate, SvelteMap } from 'svelte/reactivity';
 	import Chart from 'chart.js/auto';
 
 	type ReadingSession = {
@@ -11,7 +11,14 @@
 		duration: number;
 		totalPages: number;
 	};
-	type Book = { totalReadPages?: number; totalReadTime?: number };
+	type Book = {
+		id: string;
+		title: string;
+		authors?: string[];
+		coverUrl?: string;
+		totalReadPages?: number;
+		totalReadTime?: number;
+	};
 	let { sessions, books }: { sessions: ReadingSession[]; books: Book[] } = $props();
 	let dailyCanvas = $state<HTMLCanvasElement>();
 	let monthlyCanvas = $state<HTMLCanvasElement>();
@@ -111,9 +118,50 @@
 	};
 
 	let hoveredCell = $state<CalendarCell | null>(null);
+	let selectedDateStr = $state<string | null>(null);
+
+	// day -> book -> { seconds, pages }. Only books present in `books` are listed, so
+	// sessions of hidden/deleted books never leak into the day detail.
+	let booksByDay = $derived.by(() => {
+		const titles = new Map(books.map((book) => [book.id, book]));
+		const days = new SvelteMap<string, Map<string, { seconds: number; pages: Set<number> }>>();
+		for (const session of sessions) {
+			if (!session.startTime || !titles.has(session.bookId)) continue;
+			const key = dayKey(new Date(session.startTime * 1000));
+			const perBook = days.get(key) ?? new SvelteMap();
+			const entry = perBook.get(session.bookId) ?? { seconds: 0, pages: new Set<number>() };
+			entry.seconds += session.duration;
+			entry.pages.add(session.page);
+			perBook.set(session.bookId, entry);
+			days.set(key, perBook);
+		}
+		return days;
+	});
+
+	let selectedDay = $derived.by(() => {
+		if (!selectedDateStr) return null;
+		const cell = calendarData.weeks
+			.flatMap((week) => week.days)
+			.find((day) => day?.dateStr === selectedDateStr);
+		if (!cell) return null;
+		const perBook = booksByDay.get(selectedDateStr);
+		const list = [...(perBook?.entries() ?? [])]
+			.map(([bookId, entry]) => ({
+				book: books.find((book) => book.id === bookId)!,
+				seconds: entry.seconds,
+				pages: entry.pages.size
+			}))
+			.sort((a, b) => b.seconds - a.seconds);
+		return { cell, list };
+	});
+
+	function selectDay(day: CalendarCell) {
+		if (day.isFuture) return;
+		selectedDateStr = selectedDateStr === day.dateStr ? null : day.dateStr;
+	}
 
 	let calendarData = $derived.by(() => {
-		const daysMap = new Map<string, { seconds: number; pages: Set<string> }>();
+		const daysMap = new SvelteMap<string, { seconds: number; pages: Set<string> }>();
 		for (const session of sessions) {
 			if (!session.startTime) continue;
 			const d = new Date(session.startTime * 1000);
@@ -124,17 +172,17 @@
 			daysMap.set(k, entry);
 		}
 
-		const today = new Date();
+		const today = new SvelteDate();
 		today.setHours(0, 0, 0, 0);
 		const todayKey = dayKey(today);
 
 		// GitHub standard: 53 weeks ending on the current week's Saturday
 		const endDayOfWeek = today.getDay(); // 0 is Sun, 6 is Sat
 		const daysUntilSaturday = 6 - endDayOfWeek;
-		const endDate = new Date(today);
+		const endDate = new SvelteDate(today);
 		endDate.setDate(today.getDate() + daysUntilSaturday);
 
-		const startDate = new Date(endDate);
+		const startDate = new SvelteDate(endDate);
 		startDate.setDate(endDate.getDate() - (53 * 7 - 1));
 
 		const weeks: CalendarWeek[] = [];
@@ -146,7 +194,7 @@
 		let yearTotalSeconds = 0;
 		let yearActiveDays = 0;
 
-		const iterDate = new Date(startDate);
+		const iterDate = new SvelteDate(startDate);
 		while (iterDate <= endDate) {
 			const dayOfWeek = iterDate.getDay();
 			const dateStr = dayKey(iterDate);
@@ -221,7 +269,7 @@
 		}
 
 		let activeStreak = 0;
-		const checkDate = new Date(today);
+		const checkDate = new SvelteDate(today);
 		while (true) {
 			const k = dayKey(checkDate);
 			const s = daysMap.get(k)?.seconds ?? 0;
@@ -508,16 +556,16 @@
 				</div>
 				<div class="calendar-weeks-container">
 					<div class="calendar-months-row">
-						{#each calendarData.weeks as week}
+						{#each calendarData.weeks as week, weekIndex (weekIndex)}
 							<div class="calendar-month-item" style="width: 14px;">
 								{week.monthLabel ?? ''}
 							</div>
 						{/each}
 					</div>
 					<div class="calendar-cells-matrix">
-						{#each calendarData.weeks as week}
+						{#each calendarData.weeks as week, weekIndex (weekIndex)}
 							<div class="calendar-week-col">
-								{#each week.days as day}
+								{#each week.days as day, dayIndex (dayIndex)}
 									{#if day}
 										<div
 											class="calendar-cell cal-level-{day.level}"
@@ -526,7 +574,15 @@
 											role="gridcell"
 											tabindex="0"
 											aria-label="{day.label}: {day.seconds > 0 ? durationLabel(day.seconds) : 'Tidak ada aktivitas'}"
-											onmouseenter={() => (hoveredCell = day)}
+											class:is-selected={day.dateStr === selectedDateStr}
+										onclick={() => selectDay(day)}
+										onkeydown={(e) => {
+											if (e.key === 'Enter' || e.key === ' ') {
+												e.preventDefault();
+												selectDay(day);
+											}
+										}}
+										onmouseenter={() => (hoveredCell = day)}
 											onmouseleave={() => (hoveredCell = null)}
 											onfocus={() => (hoveredCell = day)}
 											onblur={() => (hoveredCell = null)}
@@ -548,13 +604,13 @@
 					<span>
 						📅 <strong>{hoveredCell.label}</strong>:
 						{#if hoveredCell.seconds > 0}
-							{durationLabel(hoveredCell.seconds)} ({hoveredCell.hours} jam) · {hoveredCell.pages} sesi dibaca
+							{durationLabel(hoveredCell.seconds)} ({hoveredCell.hours} jam) · {hoveredCell.pages} halaman dibaca
 						{:else}
 							Tidak ada aktivitas membaca
 						{/if}
 					</span>
 				{:else}
-					<span style="color: var(--muted);">Arahkan kursor ke kotak untuk melihat rincian jam baca per hari</span>
+					<span style="color: var(--muted);">Arahkan kursor ke kotak untuk melihat jam baca, klik untuk melihat buku yang dibaca pada hari itu</span>
 				{/if}
 			</div>
 
@@ -570,6 +626,33 @@
 				<span>Lebih lama</span>
 			</div>
 		</div>
+
+		{#if selectedDay}
+			<div class="day-detail" aria-live="polite">
+				<div class="day-detail-head">
+					<strong>📅 {selectedDay.cell.label}</strong>
+					<button type="button" class="day-detail-close" onclick={() => (selectedDateStr = null)} aria-label="Tutup rincian hari">×</button>
+				</div>
+				{#if selectedDay.list.length === 0}
+					<p class="day-detail-empty">Tidak ada buku yang dibaca pada hari ini.</p>
+				{:else}
+					<p class="day-detail-sub">
+						{selectedDay.list.length} buku · {durationLabel(selectedDay.list.reduce((sum, item) => sum + item.seconds, 0))}
+					</p>
+					<ul class="day-detail-list">
+						{#each selectedDay.list as item (item.book.id)}
+							<li>
+								<div class="day-detail-book">
+									<strong>{item.book.title}</strong>
+									{#if item.book.authors?.length}<small>{item.book.authors.join(', ')}</small>{/if}
+								</div>
+								<span>{durationLabel(item.seconds)} · {item.pages} halaman</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		{/if}
 	</article>
 
 	{#if sessions.length}
@@ -607,3 +690,61 @@
 		statistics.
 	</p>
 </section>
+
+<style>
+	.calendar-cell:not(.is-future) {
+		cursor: pointer;
+	}
+	.calendar-cell.is-selected {
+		outline: 2px solid var(--orange, #dc6a45);
+		outline-offset: 1px;
+	}
+	.day-detail {
+		margin-top: 14px;
+		padding: 12px 14px;
+		border: 1px solid var(--orange, #dc6a45);
+		border-radius: 10px;
+	}
+	.day-detail-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.day-detail-close {
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-size: 20px;
+		line-height: 1;
+		cursor: pointer;
+	}
+	.day-detail-sub,
+	.day-detail-empty {
+		margin: 4px 0 8px;
+		color: var(--muted);
+		font-size: 12px;
+	}
+	.day-detail-list {
+		display: grid;
+		gap: 8px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.day-detail-list li {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.day-detail-book {
+		display: grid;
+	}
+	.day-detail-book small,
+	.day-detail-list li > span {
+		color: var(--muted);
+		font-size: 12px;
+	}
+</style>

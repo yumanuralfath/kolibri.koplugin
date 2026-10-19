@@ -440,7 +440,6 @@
 		{/if}
 
 		{#if selectedBook}
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<div
 				class="modal-backdrop"
 				role="dialog"
@@ -514,10 +513,10 @@
 							<div class="detail-stat-card">
 								<span class="stat-caption">📆 HARI MEMBACA</span>
 								<strong>
-									{getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt || new Date().toISOString())} hari
+									{getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt || selectedBook.lastReadAt)} hari
 								</strong>
 								<small>
-									{selectedBook.status === 'finished' ? 'Hingga selesai dibaca' : 'Sejak awal membaca hingga sekarang'}
+									{selectedBook.status === 'finished' ? 'Sejak mulai hingga selesai dibaca' : 'Sejak mulai hingga terakhir dibaca/dibuka'}
 								</small>
 							</div>
 
@@ -586,7 +585,7 @@
 											>
 												‹
 											</button>
-											{#each Array.from({ length: totalBookModalHighlightPages }, (_, i) => i + 1) as p}
+											{#each Array.from({ length: totalBookModalHighlightPages }, (_, i) => i + 1) as p (p)}
 												<button
 													type="button"
 													class="pagination-btn"

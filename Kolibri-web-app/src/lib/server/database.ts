@@ -24,6 +24,10 @@ database.exec(`
 		id TEXT PRIMARY KEY,
 		data TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS deleted_books (
+		id TEXT PRIMARY KEY,
+		deleted_at TEXT NOT NULL
+	);
 `);
 
 function settingExists(key: string): boolean {
@@ -225,5 +229,34 @@ export function saveBooks(books: { id: string }[]): void {
 			seen.add(book.id);
 			insert.run(book.id, JSON.stringify(book));
 		}
+	});
+}
+
+export function getDeletedBookIds(): Set<string> {
+	return new Set(
+		(database.prepare('SELECT id FROM deleted_books').all() as { id: string }[]).map(
+			(row) => row.id
+		)
+	);
+}
+
+/**
+ * Permanently removes a book from the web app: the book row, every reading session
+ * (pages + duration) belonging to it, and records a tombstone so later KOReader syncs
+ * do not bring it back. Session ids have the form `<bookId>:<page>:<startTime>`.
+ */
+export function deleteBookAndStats(bookId: string): { deletedSessions: number } {
+	return inTransaction(() => {
+		const prefix = `${bookId}:`;
+		const sessions = database
+			.prepare('DELETE FROM reading_sessions WHERE substr(id, 1, ?) = ?')
+			.run(prefix.length, prefix);
+		database.prepare('DELETE FROM books WHERE id = ?').run(bookId);
+		database
+			.prepare(
+				'INSERT INTO deleted_books (id, deleted_at) VALUES (?, ?) ON CONFLICT(id) DO NOTHING'
+			)
+			.run(bookId, new Date().toISOString());
+		return { deletedSessions: Number(sessions.changes) };
 	});
 }

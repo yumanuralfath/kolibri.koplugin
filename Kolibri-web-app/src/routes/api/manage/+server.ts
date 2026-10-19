@@ -1,11 +1,23 @@
 import { json } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
 import { isAuthenticated } from '../../../lib/server/auth';
-import { readLibrary, updateLibrary } from '../../../lib/server/library';
+import { deleteBook, readLibrary, safeBookId, updateLibrary } from '../../../lib/server/library';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
 	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	return json(readLibrary());
+};
+
+export const DELETE: RequestHandler = async ({ request }) => {
+	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	const body = (await request.json().catch(() => null)) as { bookId?: string } | null;
+	const bookId = safeBookId(String(body?.bookId ?? ''));
+	if (!bookId) return json({ error: 'Book id is required.' }, { status: 400 });
+	if (!readLibrary().books.some((book) => book.id === bookId)) {
+		return json({ error: 'Book not found.' }, { status: 404 });
+	}
+	deleteBook(bookId);
 	return json(readLibrary());
 };
 

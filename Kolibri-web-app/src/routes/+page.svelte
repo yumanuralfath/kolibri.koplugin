@@ -365,6 +365,32 @@
 		}
 	}
 
+	async function deleteBook(book: Book) {
+		if (
+			!confirm(
+				`Hapus "${book.title}" dari web app?\n\nSemua statistik buku ini (halaman, durasi baca, riwayat sesi, dan catatan) ikut dihapus dan buku tidak akan muncul lagi saat sync berikutnya. Buku di perangkat KOReader tidak terpengaruh.`
+			)
+		)
+			return;
+		pending = `del-book-${book.id}`;
+		errorMessage = '';
+		try {
+			const response = await fetch('/api/manage', {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ bookId: book.id })
+			});
+			if (!response.ok) throw new Error('Gagal menghapus buku.');
+			library = await response.json();
+			selectedBookId = null;
+			successMessage = `"${book.title}" dihapus beserta seluruh statistiknya.`;
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan.';
+		} finally {
+			pending = '';
+		}
+	}
+
 	async function changeAdminPassword(event: SubmitEvent) {
 		event.preventDefault();
 		errorMessage = '';
@@ -1060,6 +1086,14 @@
 									>
 										{selectedBook.visible ? '◉ Ditampilkan di Rak Publik' : '○ Disembunyikan dari Publik'}
 									</button>
+									<button
+										type="button"
+										class="book-delete-btn"
+										disabled={pending === `del-book-${selectedBook.id}`}
+										onclick={() => deleteBook(selectedBook)}
+									>
+										🗑 Hapus buku
+									</button>
 								</div>
 							</div>
 							<button
@@ -1108,10 +1142,10 @@
 								<div class="detail-stat-card">
 									<span class="stat-caption">📆 HARI MEMBACA</span>
 									<strong>
-										{getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt || new Date().toISOString())} hari
+										{getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt || selectedBook.lastReadAt)} hari
 									</strong>
 									<small>
-										{selectedBook.status === 'finished' ? 'Hingga selesai dibaca' : 'Sejak awal membaca hingga sekarang'}
+										{selectedBook.status === 'finished' ? 'Sejak mulai hingga selesai dibaca' : 'Sejak mulai hingga terakhir dibaca/dibuka'}
 									</small>
 								</div>
 
