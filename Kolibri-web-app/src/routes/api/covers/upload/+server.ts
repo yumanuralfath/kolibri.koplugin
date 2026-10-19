@@ -12,24 +12,24 @@ import type { RequestHandler } from './$types';
 
 // Body = bytes gambar mentah, id buku lewat query ?bookId=
 export const POST: RequestHandler = async ({ request, url }) => {
-	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!(await isAuthenticated(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const bookId = url.searchParams.get('bookId') ?? '';
-	const existing = readLibrary().books.find((b) => b.id === bookId);
+	const existing = (await readLibrary()).books.find((b) => b.id === bookId);
 	if (!existing) return json({ error: 'Buku tidak ditemukan.' }, { status: 404 });
 
-	const buf = Buffer.from(await request.arrayBuffer());
+	const buf = new Uint8Array(await request.arrayBuffer());
 	if (buf.length === 0) return json({ error: 'File kosong.' }, { status: 400 });
 	if (buf.length > MAX_COVER_BYTES)
-		return json({ error: 'Ukuran gambar maksimal 5 MB.' }, { status: 413 });
+		return json({ error: 'Ukuran gambar maksimal 4 MB.' }, { status: 413 });
 	const ext = detectImageExt(buf);
 	if (!ext) return json({ error: 'Format harus JPG, PNG, WebP, atau GIF.' }, { status: 415 });
 
-	const name = saveCoverFile(buf, ext);
+	const name = await saveCoverFile(buf, ext);
 	const oldCover = existing.coverUrl;
-	const library = updateLibrary((data) => {
+	const library = await updateLibrary((data) => {
 		const book = data.books.find((b) => b.id === bookId);
 		if (book) book.coverUrl = `${COVER_PREFIX}${name}`;
 	});
-	removeUploadedCover(oldCover);
+	await removeUploadedCover(oldCover);
 	return json(library);
 };

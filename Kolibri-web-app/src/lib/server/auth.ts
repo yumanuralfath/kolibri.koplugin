@@ -10,41 +10,41 @@ function equal(left: string, right: string): boolean {
 	return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export function isSetupRequired(): boolean {
-	return !getSetting('passwordHash') || !getSetting('passwordSalt');
+export async function isSetupRequired(): Promise<boolean> {
+	return !(await getSetting('passwordHash')) || !(await getSetting('passwordSalt'));
 }
 
-export function setupAdmin(password: string): void {
-	if (!isSetupRequired()) throw new Error('Kolibri is already configured.');
+export async function setupAdmin(password: string): Promise<void> {
+	if (!(await isSetupRequired())) throw new Error('Kolibri is already configured.');
 	const salt = randomBytes(16).toString('hex');
 	const passwordHash = scryptSync(password, salt, 64).toString('hex');
 	const sessionSecret = randomBytes(32).toString('base64url');
-	if (!setInitialSettings({ passwordSalt: salt, passwordHash, sessionSecret })) {
+	if (!(await setInitialSettings({ passwordSalt: salt, passwordHash, sessionSecret }))) {
 		throw new Error('Kolibri is already configured.');
 	}
 }
 
-export function verifyPassword(password: string): boolean {
-	const salt = getSetting('passwordSalt');
-	const expected = getSetting('passwordHash');
+export async function verifyPassword(password: string): Promise<boolean> {
+	const salt = await getSetting('passwordSalt');
+	const expected = await getSetting('passwordHash');
 	if (!salt || !expected) return false;
 	const actual = scryptSync(password, salt, 64).toString('hex');
 	return equal(actual, expected);
 }
 
-function sign(value: string): string {
-	const sessionSecret = getSetting('sessionSecret');
+async function sign(value: string): Promise<string> {
+	const sessionSecret = await getSetting('sessionSecret');
 	if (!sessionSecret) return '';
 	return createHmac('sha256', sessionSecret).update(value).digest('base64url');
 }
 
-export function createSession(): string {
+export async function createSession(): Promise<string> {
 	const value = `${Date.now() + sessionLifetime * 1000}.${randomUUID()}`;
-	return `${value}.${sign(value)}`;
+	return `${value}.${await sign(value)}`;
 }
 
-export function isAuthenticated(request: Request): boolean {
-	if (isSetupRequired() || !getSetting('sessionSecret')) return false;
+export async function isAuthenticated(request: Request): Promise<boolean> {
+	if ((await isSetupRequired()) || !(await getSetting('sessionSecret'))) return false;
 	const cookie = request.headers.get('cookie') ?? '';
 	const value = cookie
 		.split(';')
@@ -54,20 +54,20 @@ export function isAuthenticated(request: Request): boolean {
 	if (!value) return false;
 	const [expires, nonce, signature] = value.split('.');
 	if (!expires || !nonce || !signature || Number(expires) < Date.now()) return false;
-	return equal(signature, sign(`${expires}.${nonce}`));
+	return equal(signature, await sign(`${expires}.${nonce}`));
 }
 
-export function changePassword(password: string): void {
+export async function changePassword(password: string): Promise<void> {
 	const salt = randomBytes(16).toString('hex');
 	const passwordHash = scryptSync(password, salt, 64).toString('hex');
-	setSettings({
+	await setSettings({
 		passwordSalt: salt,
 		passwordHash,
 		sessionSecret: randomBytes(32).toString('base64url')
 	});
 }
 
-export function hasSyncPassword(request: Request): boolean {
+export async function hasSyncPassword(request: Request): Promise<boolean> {
 	const received = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-	return Boolean(received && verifyPassword(received));
+	return Boolean(received && (await verifyPassword(received)));
 }

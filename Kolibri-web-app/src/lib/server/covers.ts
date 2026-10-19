@@ -1,12 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { deleteCover, saveCover } from './database';
 
 export const COVER_PREFIX = '/api/covers/file/';
-export const MAX_COVER_BYTES = 5 * 1024 * 1024;
-
-const coversDir = join(process.cwd(), 'data', 'covers');
-mkdirSync(coversDir, { recursive: true, mode: 0o700 });
+// Batas body fungsi serverless Vercel ~4.5 MB; browser sudah memperkecil gambar sebelum upload.
+export const MAX_COVER_BYTES = 4 * 1024 * 1024;
 
 const nameRe = /^[a-f0-9]{24}\.(jpg|png|webp|gif)$/;
 
@@ -21,36 +18,29 @@ export function isValidCoverName(name: string): boolean {
 	return nameRe.test(name);
 }
 
-export function coverPath(name: string): string {
-	return join(coversDir, name);
-}
-
 /** Deteksi tipe gambar dari magic bytes; null jika bukan gambar yang didukung. */
-export function detectImageExt(buf: Buffer): 'jpg' | 'png' | 'webp' | 'gif' | null {
-	if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
-	if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+export function detectImageExt(buf: Uint8Array): 'jpg' | 'png' | 'webp' | 'gif' | null {
+	const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+	if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+	if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
 		return 'png';
-	if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP')
+	if (b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP')
 		return 'webp';
-	if (buf.length > 6 && (buf.toString('ascii', 0, 6) === 'GIF87a' || buf.toString('ascii', 0, 6) === 'GIF89a'))
+	if (b.length > 6 && (b.toString('ascii', 0, 6) === 'GIF87a' || b.toString('ascii', 0, 6) === 'GIF89a'))
 		return 'gif';
 	return null;
 }
 
-export function saveCoverFile(buf: Buffer, ext: string): string {
+export async function saveCoverFile(buf: Uint8Array, ext: string): Promise<string> {
 	const name = `${randomBytes(12).toString('hex')}.${ext}`;
-	writeFileSync(coverPath(name), buf, { mode: 0o600 });
+	await saveCover(name, coverMime[ext], buf);
 	return name;
 }
 
-/** Hapus file sampul unggahan lama bila coverUrl menunjuk ke sana. */
-export function removeUploadedCover(coverUrl?: string): void {
+/** Hapus sampul unggahan lama dari database bila coverUrl menunjuk ke sana. */
+export async function removeUploadedCover(coverUrl?: string): Promise<void> {
 	if (!coverUrl?.startsWith(COVER_PREFIX)) return;
 	const name = coverUrl.slice(COVER_PREFIX.length);
 	if (!isValidCoverName(name)) return;
-	try {
-		unlinkSync(coverPath(name));
-	} catch {
-		// file sudah tidak ada
-	}
+	await deleteCover(name).catch(() => {});
 }

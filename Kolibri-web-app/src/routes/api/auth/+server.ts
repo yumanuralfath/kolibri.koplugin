@@ -9,31 +9,31 @@ import {
 } from '../../../lib/server/auth';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = ({ request }) =>
-	json({ authenticated: isAuthenticated(request), setupRequired: isSetupRequired() });
+export const GET: RequestHandler = async ({ request }) =>
+	json({ authenticated: await isAuthenticated(request), setupRequired: await isSetupRequired() });
 
 export const POST: RequestHandler = async ({ request, cookies, url }) => {
 	const body = (await request.json().catch(() => null)) as {
 		password?: string;
 		setup?: boolean;
 	} | null;
-	if (isSetupRequired()) {
+	if (await isSetupRequired()) {
 		if (!body?.setup) return json({ error: 'Initial setup required.' }, { status: 409 });
 		if (!body.password || body.password.length < 12) {
 			return json({ error: 'Password harus berisi minimal 12 karakter.' }, { status: 400 });
 		}
 		try {
-			setupAdmin(body.password);
+			await setupAdmin(body.password);
 		} catch {
 			return json(
 				{ error: 'Setup sudah selesai. Muat ulang halaman untuk masuk.' },
 				{ status: 409 }
 			);
 		}
-	} else if (!body?.password || !verifyPassword(body.password)) {
+	} else if (!body?.password || !(await verifyPassword(body.password))) {
 		return json({ error: 'Password tidak cocok.' }, { status: 401 });
 	}
-	cookies.set('kolibri_session', createSession(), {
+	cookies.set('kolibri_session', await createSession(), {
 		httpOnly: true,
 		secure: url.protocol === 'https:',
 		sameSite: 'strict',
@@ -49,19 +49,19 @@ export const DELETE: RequestHandler = ({ cookies }) => {
 };
 
 export const PATCH: RequestHandler = async ({ request, cookies, url }) => {
-	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!(await isAuthenticated(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const body = (await request.json().catch(() => null)) as {
 		currentPassword?: string;
 		newPassword?: string;
 	} | null;
-	if (!body?.currentPassword || !verifyPassword(body.currentPassword)) {
+	if (!body?.currentPassword || !(await verifyPassword(body.currentPassword))) {
 		return json({ error: 'Password saat ini tidak cocok.' }, { status: 401 });
 	}
 	if (!body.newPassword || body.newPassword.length < 12) {
 		return json({ error: 'Password baru harus berisi minimal 12 karakter.' }, { status: 400 });
 	}
-	changePassword(body.newPassword);
-	cookies.set('kolibri_session', createSession(), {
+	await changePassword(body.newPassword);
+	cookies.set('kolibri_session', await createSession(), {
 		httpOnly: true,
 		secure: url.protocol === 'https:',
 		sameSite: 'strict',

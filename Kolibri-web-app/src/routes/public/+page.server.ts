@@ -2,7 +2,7 @@ import { readLibrary, type Book } from '../../lib/server/library';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async () => {
-	const library = readLibrary();
+	const library = await readLibrary();
 
 	// Hanya buku yang ditandai tampil di publik.
 	const visibleBooks = library.books.filter((book: Book) => book.visible);

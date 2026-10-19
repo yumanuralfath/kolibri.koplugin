@@ -38,9 +38,9 @@ export const GET: RequestHandler = async ({ url }) => {
 };
 
 export const POST: RequestHandler = async ({ request }) => {
-	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!(await isAuthenticated(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const body = (await request.json().catch(() => ({}))) as { overwriteAll?: boolean };
-	const library = readLibrary();
+	const library = await readLibrary();
 	const targetBooks = library.books.filter((b) => body.overwriteAll || !b.coverUrl);
 
 	if (targetBooks.length === 0) {
@@ -72,7 +72,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	if (updatedCovers.size > 0) {
-		updateLibrary((data) => {
+		await updateLibrary((data) => {
 			for (const book of data.books) {
 				const newCover = updatedCovers.get(book.id);
 				if (newCover) {
@@ -86,6 +86,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		ok: true,
 		updatedCount: updatedCovers.size,
 		totalChecked: targetBooks.length,
-		library: readLibrary()
+		library: await readLibrary()
 	});
 };

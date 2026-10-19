@@ -79,27 +79,55 @@ export type Library = {
 	publishId?: string;
 };
 
-export function readLibrary(): Library {
-	return {
-		books: getBooks().map((book) => JSON.parse(book) as Book),
-		readingSessions: getReadingSessions().map((session) => JSON.parse(session) as ReadingSession),
-		published: getSetting('published') === 'true',
-		publishId: getSetting('publishId')
-	};
+/**
+ * Tanggal mulai & terakhir dibaca diturunkan dari sesi baca (seperti statistik KOReader):
+ * mulai = sesi pertama, terakhir = akhir sesi terakhir. Buku tanpa sesi memakai nilai tersimpan.
+ */
+function applySessionDates(books: Book[], sessions: ReadingSession[]): void {
+	const first = new Map<string, number>();
+	const last = new Map<string, number>();
+	for (const session of sessions) {
+		if (!Number.isFinite(session.startTime) || session.startTime <= 0) continue;
+		const end = session.startTime + Math.max(0, session.duration || 0);
+		const f = first.get(session.bookId);
+		if (f === undefined || session.startTime < f) first.set(session.bookId, session.startTime);
+		const l = last.get(session.bookId);
+		if (l === undefined || end > l) last.set(session.bookId, end);
+	}
+	for (const book of books) {
+		const f = first.get(book.id);
+		const l = last.get(book.id);
+		if (f !== undefined) book.startedAt = new Date(f * 1000).toISOString();
+		if (l !== undefined) book.lastReadAt = new Date(l * 1000).toISOString();
+	}
+	books.sort((a, b) => new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime());
 }
 
-export function saveIncomingSessions(sessions: ReadingSession[]): void {
-	saveReadingSessions(sessions);
+export async function readLibrary(): Promise<Library> {
+	const [bookRows, sessionRows, published, publishId] = await Promise.all([
+		getBooks(),
+		getReadingSessions(),
+		getSetting('published'),
+		getSetting('publishId')
+	]);
+	const books = bookRows.map((book) => JSON.parse(book) as Book);
+	const readingSessions = sessionRows.map((session) => JSON.parse(session) as ReadingSession);
+	applySessionDates(books, readingSessions);
+	return { books, readingSessions, published: published === 'true', publishId };
 }
 
-export function updateLibrary(update: (library: Library) => void | Promise<void>): Library {
-	const library = readLibrary();
-	const result = update(library);
-	if (result instanceof Promise) throw new Error('SQLite library updates must be synchronous.');
-	saveBooks(library.books);
-	setSetting('published', library.published ? 'true' : 'false');
-	if (library.publishId) setSetting('publishId', library.publishId);
-	else setSetting('publishId', '');
+export async function saveIncomingSessions(sessions: ReadingSession[]): Promise<void> {
+	await saveReadingSessions(sessions);
+}
+
+export async function updateLibrary(
+	update: (library: Library) => void | Promise<void>
+): Promise<Library> {
+	const library = await readLibrary();
+	await update(library);
+	await saveBooks(library.books);
+	await setSetting('published', library.published ? 'true' : 'false');
+	await setSetting('publishId', library.publishId ?? '');
 	return library;
 }
 
@@ -107,10 +135,10 @@ export function safeBookId(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
 }
 
-export function getDeletedBooks(): Set<string> {
+export function getDeletedBooks(): Promise<Set<string>> {
 	return getDeletedBookIds();
 }
 
-export function deleteBook(bookId: string): { deletedSessions: number } {
+export function deleteBook(bookId: string): Promise<{ deletedSessions: number }> {
 	return deleteBookAndStats(bookId);
 }

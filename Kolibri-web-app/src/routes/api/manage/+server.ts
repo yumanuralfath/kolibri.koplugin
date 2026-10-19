@@ -6,25 +6,24 @@ import { deleteBook, readLibrary, safeBookId, updateLibrary } from '../../../lib
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
-	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
-	return json(readLibrary());
+	if (!(await isAuthenticated(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
+	return json(await readLibrary());
 };
 
 export const DELETE: RequestHandler = async ({ request }) => {
-	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!(await isAuthenticated(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const body = (await request.json().catch(() => null)) as { bookId?: string } | null;
 	const bookId = safeBookId(String(body?.bookId ?? ''));
 	if (!bookId) return json({ error: 'Book id is required.' }, { status: 400 });
-	if (!readLibrary().books.some((book) => book.id === bookId)) {
-		return json({ error: 'Book not found.' }, { status: 404 });
-	}
-	removeUploadedCover(readLibrary().books.find((book) => book.id === bookId)?.coverUrl);
-	deleteBook(bookId);
-	return json(readLibrary());
+	const existing = (await readLibrary()).books.find((book) => book.id === bookId);
+	if (!existing) return json({ error: 'Book not found.' }, { status: 404 });
+	await removeUploadedCover(existing.coverUrl);
+	await deleteBook(bookId);
+	return json(await readLibrary());
 };
 
 export const PATCH: RequestHandler = async ({ request }) => {
-	if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!(await isAuthenticated(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const body = (await request.json().catch(() => null)) as {
 		bookId?: string;
 		visible?: boolean;
@@ -43,7 +42,8 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		deleteHighlightId?: string;
 	} | null;
 	if (!body) return json({ error: 'Invalid request.' }, { status: 400 });
-	const library = updateLibrary((data) => {
+	let staleCover: string | undefined;
+	const library = await updateLibrary((data) => {
 		if (typeof body.published === 'boolean') {
 			data.published = body.published;
 			if (body.published && !data.publishId) data.publishId = randomUUID().replaceAll('-', '');
@@ -54,7 +54,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 				if (typeof body.visible === 'boolean') book.visible = body.visible;
 				if (body.coverUrl !== undefined) {
 					const nextCover = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
-					if (book.coverUrl !== nextCover) removeUploadedCover(book.coverUrl);
+					if (book.coverUrl !== nextCover) staleCover = book.coverUrl;
 					book.coverUrl = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
 				}
 				if (body.startedAt) book.startedAt = String(body.startedAt);
@@ -95,5 +95,6 @@ export const PATCH: RequestHandler = async ({ request }) => {
 			}
 		}
 	});
+	await removeUploadedCover(staleCover);
 	return json(library);
 };

@@ -1,28 +1,11 @@
-# Kolibri
+# Kolibri web app
 
-Kolibri is a private reading dashboard for KOReader. The KOReader plugin sends book metadata, current page, page count, and saved highlights to the SvelteKit API. The dashboard stores books, authentication settings, and generated credentials in an embedded SQLite database at `data/kolibri.sqlite`.
+Dashboard SvelteKit untuk Kolibri. Dokumentasi lengkap (setup, Turso, deploy Vercel, API) ada di [README di root repo](../README.md).
 
-## Run locally
+Ringkas:
 
-1. Start the app with `bun run dev -- --host 0.0.0.0`.
-2. Open the app in a browser and create an admin password (at least 12 characters). This setup screen is only available before the first password is saved.
-3. In KOReader, install the sibling `Kolibri.koplugin` folder. Set the server URL to the computer's LAN address, such as `http://192.168.1.10:5173`, and set the same admin password in the plugin.
-4. Open a book. The plugin imports the KOReader statistics database's book catalog and page-reading history, then automatically queues sync until KOReader is online, retries when network connectivity returns, and checks again periodically while reading. **Sync current book now** remains available as an optional manual action.
-
-The plugin sends the admin password as a bearer credential. Use HTTPS outside a trusted network, and do not expose the development server directly to the public internet. Admin APIs use an HttpOnly, SameSite session cookie.
-
-## Dashboard and sharing
-
-The home page is password protected. It shows the reading/finished/paused shelves, page progress, and highlights. Book visibility can be toggled independently. Turning on **Publish** creates an unlisted `/p/<id>` shelf link; only visible books appear there, and highlights remain private. Turning Publish off invalidates the public page.
-
-Each book's **Change cover** controls can search Open Library automatically or accept a direct image URL. Cover results and metadata require an internet connection.
-
-## API
-
-- `POST /api/sync` accepts the current `book`, the full KOReader `books` catalog, historical `stats` (`book_md5`, `page`, `start_time`, `duration`, `total_pages`), and current-book `highlights`, with `Authorization: Bearer <admin-password>`.
-- `GET /api/manage` and `PATCH /api/manage` require the admin session cookie.
-- The first `POST /api/auth` with `{ "setup": true, "password": "..." }` creates the admin account; later posts log in with the password.
-- `PATCH /api/auth` changes the admin password after verifying the current password; it rotates the session secret and renews the current admin session.
-- `GET /api/public/<id>` returns the visible public books only while Publish is enabled.
-
-The dashboard charts daily pages, monthly reading time, weekday patterns, active days, longest reading day, and pages-per-day from the imported history. KOReader exports `statistics.sqlite3` records (`book` and `page_stat_data`) on sync. The SQLite database is intended for a single app instance with a persistent writable disk. Back up `data/kolibri.sqlite` regularly. The database directory and file are restricted to the current user on Linux/macOS. The session signing secret is generated locally and stored in the database. If a previous installation has `data/library.json`, Kolibri imports it on the first database start. Runtime needs Node.js with `node:sqlite` support (Node.js 22.13 or newer); Bun can still be used for package management and development commands.
+```bash
+bun install
+cp .env.example .env   # isi TURSO_DATABASE_URL dan TURSO_AUTH_TOKEN
+bun run dev
+```

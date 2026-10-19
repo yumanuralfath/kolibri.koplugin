@@ -1,5 +1,3 @@
-import { appendFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { json } from '@sveltejs/kit';
 import { hasSyncPassword } from '../../../lib/server/auth';
 import {
@@ -74,13 +72,13 @@ function cleanHighlights(value: unknown, bookId: string = ''): Highlight[] {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	if (!hasSyncPassword(request)) return json({ error: 'Unauthorized.' }, { status: 401 });
+	if (!(await hasSyncPassword(request))) return json({ error: 'Unauthorized.' }, { status: 401 });
 	const payload = (await request.json().catch(() => null)) as SyncPayload | null;
 	if (!payload || typeof payload !== 'object') {
 		return json({ error: 'Invalid JSON body.' }, { status: 400 });
 	}
 	// Books deleted from the web app stay deleted: ignore them (and their stats/highlights) on every sync.
-	const deletedIds = getDeletedBooks();
+	const deletedIds = await getDeletedBooks();
 	const rawBooks = asArray<Record<string, unknown>>(payload.books);
 	const rawStats = asArray<Record<string, unknown>>(payload.stats);
 	const incomingBooks = rawBooks.filter((item) => !deletedIds.has(cleanId(item.md5 ?? item.id)));
@@ -97,12 +95,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		.trim()
 		.slice(0, 500);
 
-	try {
-		appendFileSync(
-			join(process.cwd(), 'data', 'sync.log'),
-			`[${new Date().toISOString()}] Sync POST: bookId=${id}, title="${title}", highlightsCount=${incomingHighlights.length}, rawHighlights=${JSON.stringify(payload?.highlights)?.slice(0, 300)}, booksCount=${incomingBooks.length}, statsCount=${incomingStats.length}\n`
-		);
-	} catch {}
 	// A library-only sync (no book currently open) is valid as long as it carries data.
 	const hasCurrentBook = Boolean(id && title) && !currentBookDeleted;
 	const hadDeletedData =
@@ -157,6 +149,28 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	}
 	if (source && hasCurrentBook) booksById.set(id, { ...booksById.get(id), ...source, id });
+
+	const sessions = incomingStats
+		.map((entry): ReadingSession | null => {
+			const bookId = cleanId(entry.book_md5 ?? entry.bookId);
+			const page = Number(entry.page);
+			const startTime = Number(entry.start_time ?? entry.startTime);
+			const duration = Number(entry.duration);
+			const sessionTotalPages = Number(entry.total_pages ?? entry.totalPages);
+			if (!bookId || !Number.isFinite(startTime) || startTime <= 0) return null;
+			const sessionId = `${bookId}:${page}:${startTime}`;
+			return {
+				id: sessionId,
+				bookId,
+				page: Math.max(0, Number.isFinite(page) ? page : 0),
+				startTime,
+				duration: Math.max(0, Number.isFinite(duration) ? duration : 0),
+				totalPages: Math.max(0, Number.isFinite(sessionTotalPages) ? sessionTotalPages : 0)
+			};
+		})
+		.filter((session): session is ReadingSession => session !== null);
+	// Simpan sesi dulu: tanggal mulai/terakhir dibaca diturunkan dari sesi saat library dibaca.
+	await saveIncomingSessions(sessions);
 
 	let attachedHighlightsToAny = false;
 	const library = await updateLibrary((data) => {
@@ -303,26 +317,6 @@ export const POST: RequestHandler = async ({ request }) => {
 			target.highlights = [...highlightMap.values()];
 		}
 	});
-	const sessions = incomingStats
-		.map((entry): ReadingSession | null => {
-			const bookId = cleanId(entry.book_md5 ?? entry.bookId);
-			const page = Number(entry.page);
-			const startTime = Number(entry.start_time ?? entry.startTime);
-			const duration = Number(entry.duration);
-			const sessionTotalPages = Number(entry.total_pages ?? entry.totalPages);
-			if (!bookId || !Number.isFinite(startTime) || startTime <= 0) return null;
-			const sessionId = `${bookId}:${page}:${startTime}`;
-			return {
-				id: sessionId,
-				bookId,
-				page: Math.max(0, Number.isFinite(page) ? page : 0),
-				startTime,
-				duration: Math.max(0, Number.isFinite(duration) ? duration : 0),
-				totalPages: Math.max(0, Number.isFinite(sessionTotalPages) ? sessionTotalPages : 0)
-			};
-		})
-		.filter((session): session is ReadingSession => session !== null);
-	saveIncomingSessions(sessions);
 	return json({
 		ok: true,
 		serverTime: now,
