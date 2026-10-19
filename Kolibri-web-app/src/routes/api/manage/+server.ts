@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
 import { isAuthenticated } from '../../../lib/server/auth';
+import { removeUploadedCover } from '../../../lib/server/covers';
 import { deleteBook, readLibrary, safeBookId, updateLibrary } from '../../../lib/server/library';
 import type { RequestHandler } from './$types';
 
@@ -17,6 +18,7 @@ export const DELETE: RequestHandler = async ({ request }) => {
 	if (!readLibrary().books.some((book) => book.id === bookId)) {
 		return json({ error: 'Book not found.' }, { status: 404 });
 	}
+	removeUploadedCover(readLibrary().books.find((book) => book.id === bookId)?.coverUrl);
 	deleteBook(bookId);
 	return json(readLibrary());
 };
@@ -51,6 +53,8 @@ export const PATCH: RequestHandler = async ({ request }) => {
 			if (book) {
 				if (typeof body.visible === 'boolean') book.visible = body.visible;
 				if (body.coverUrl !== undefined) {
+					const nextCover = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
+					if (book.coverUrl !== nextCover) removeUploadedCover(book.coverUrl);
 					book.coverUrl = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
 				}
 				if (body.startedAt) book.startedAt = String(body.startedAt);

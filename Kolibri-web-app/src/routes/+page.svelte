@@ -435,6 +435,54 @@
 		await save({ bookId: book.id, finishedAt: new Date(`${value}T12:00:00`).toISOString() });
 	}
 
+	async function shrinkImage(file: File): Promise<Blob> {
+		// perkecil di browser (maks 800px sisi terpanjang) agar unggahan ringan; GIF dikirim apa adanya
+		if (file.type === 'image/gif') return file;
+		try {
+			const bitmap = await createImageBitmap(file);
+			const scale = Math.min(1, 800 / Math.max(bitmap.width, bitmap.height));
+			const canvas = document.createElement('canvas');
+			canvas.width = Math.round(bitmap.width * scale);
+			canvas.height = Math.round(bitmap.height * scale);
+			const ctx = canvas.getContext('2d');
+			if (!ctx) return file;
+			ctx.fillStyle = '#fff';
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
+			ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+			const blob = await new Promise<Blob | null>((resolve) =>
+				canvas.toBlob(resolve, 'image/jpeg', 0.88)
+			);
+			return blob ?? file;
+		} catch {
+			return file;
+		}
+	}
+
+	async function uploadCover(book: Book, file: File | undefined) {
+		if (!file) return;
+		if (!file.type.startsWith('image/')) {
+			errorMessage = 'File harus berupa gambar (JPG, PNG, WebP, GIF).';
+			return;
+		}
+		pending = `upload-${book.id}`;
+		errorMessage = '';
+		try {
+			const body = await shrinkImage(file);
+			const response = await fetch(`/api/covers/upload?bookId=${encodeURIComponent(book.id)}`, {
+				method: 'POST',
+				body
+			});
+			const result = await response.json();
+			if (!response.ok) throw new Error(result.error ?? 'Upload sampul gagal.');
+			library = result;
+			successMessage = 'Sampul berhasil diperbarui.';
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Upload sampul gagal.';
+		} finally {
+			pending = '';
+		}
+	}
+
 	async function findCovers(book: Book) {
 		pending = `cover-${book.id}`;
 		try {
@@ -1133,6 +1181,70 @@
 												/>
 											</label>
 										{/if}
+									</div>
+									<div class="modal-cover-editor">
+										<span class="status-control-label">Sampul buku</span>
+										<div class="manual-cover">
+											<input
+												aria-label={`URL gambar sampul ${selectedBook.title}`}
+												placeholder="https:// URL gambar"
+												bind:value={coverDrafts[selectedBook.id]}
+											/><button
+												type="button"
+												class="small-button"
+												disabled={!coverDrafts[selectedBook.id]?.trim() || pending === selectedBook.id}
+												onclick={() => {
+													const url = coverDrafts[selectedBook.id].trim();
+													if (!/^https?:\/\//i.test(url)) {
+														errorMessage = 'URL harus diawali http:// atau https://';
+														return;
+													}
+													save({ bookId: selectedBook.id, coverUrl: url });
+												}}>Simpan URL</button
+											>
+										</div>
+										<div class="cover-tools-row">
+											<label class="small-button upload-btn" class:disabled={pending === `upload-${selectedBook.id}`}>
+												{pending === `upload-${selectedBook.id}` ? 'Mengunggah…' : '⬆ Upload gambar'}
+												<input
+													type="file"
+													accept="image/jpeg,image/png,image/webp,image/gif"
+													hidden
+													disabled={pending === `upload-${selectedBook.id}`}
+													onchange={(e) => {
+														uploadCover(selectedBook, e.currentTarget.files?.[0]);
+														e.currentTarget.value = '';
+													}}
+												/>
+											</label>
+											<button
+												type="button"
+												class="small-button"
+												disabled={pending === `cover-${selectedBook.id}`}
+												onclick={() => findCovers(selectedBook)}
+												>{pending === `cover-${selectedBook.id}` ? 'Mencari…' : 'Cari otomatis'}</button
+											>
+											{#if selectedBook.coverUrl}<button
+													type="button"
+													class="small-button"
+													onclick={() => {
+														coverDrafts[selectedBook.id] = '';
+														save({ bookId: selectedBook.id, coverUrl: null });
+													}}>Hapus sampul</button
+												>{/if}
+										</div>
+										{#if coverResults[selectedBook.id]?.length}<div class="cover-options">
+												{#each coverResults[selectedBook.id] as cover (cover.url)}<button
+														type="button"
+														class="cover-option"
+														title={`${cover.title} — ${cover.author}`}
+														onclick={() => {
+															coverDrafts[selectedBook.id] = cover.url;
+															save({ bookId: selectedBook.id, coverUrl: cover.url });
+															coverResults[selectedBook.id] = [];
+														}}><img src={cover.url} alt="" /><span>{cover.title}</span></button
+													>{/each}
+											</div>{/if}
 									</div>
 									<button
 										type="button"

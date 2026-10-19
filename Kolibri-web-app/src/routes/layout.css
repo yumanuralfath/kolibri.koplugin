@@ -2288,3 +2288,23 @@ a {
 	color: var(--ink);
 	font: inherit;
 }
+
+.modal-cover-editor {
+	display: grid;
+	gap: 8px;
+	margin: 10px 0;
+}
+.cover-tools-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.upload-btn {
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+}
+.upload-btn.disabled {
+	opacity: 0.6;
+	pointer-events: none;
+}
