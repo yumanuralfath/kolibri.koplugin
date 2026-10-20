@@ -447,7 +447,7 @@
 	}
 	.tiles {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
 		gap: 12px;
 	}
 	.tile {
@@ -546,7 +546,7 @@
 	/* peringkat */
 	.rank-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
 		gap: 16px;
 	}
 	.rank {
@@ -580,8 +580,12 @@
 		white-space: nowrap;
 	}
 	@media (max-width: 600px) {
+		.insights {
+			gap: 20px;
+		}
 		.tiles {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 8px;
 		}
 		.tile {
 			padding: 12px;
@@ -589,6 +593,25 @@
 		.tile strong {
 			font-size: 20px;
 			line-height: 28px;
+			overflow-wrap: anywhere;
+		}
+		.tile :global(.md-body-s) {
+			overflow-wrap: anywhere;
+			word-break: break-word;
+		}
+		.panel {
+			padding: 16px 12px 12px;
+			min-width: 0;
+		}
+		.chart-box {
+			height: 220px;
+		}
+		.rank-grid {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.heat-scroll {
+			margin: 0 -4px;
+			padding-inline: 4px;
 		}
 	}
 </style>

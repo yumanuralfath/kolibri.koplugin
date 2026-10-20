@@ -1807,6 +1807,101 @@ a {
 	}
 }
 
+/* Books without cover (dashboard shelf) */
+.missing-covers {
+	margin: 0 0 18px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--paper-featured);
+}
+.missing-covers-summary {
+	display: grid;
+	gap: 4px;
+	padding: 14px 16px;
+	cursor: pointer;
+	list-style: none;
+}
+.missing-covers-summary::-webkit-details-marker {
+	display: none;
+}
+.missing-covers-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-family: var(--serif);
+	font-size: 17px;
+	font-weight: 500;
+	color: var(--ink);
+}
+.missing-covers-title strong {
+	display: inline-flex;
+	min-width: 22px;
+	height: 22px;
+	align-items: center;
+	justify-content: center;
+	padding: 0 7px;
+	border-radius: 999px;
+	background: var(--orange);
+	color: #fff;
+	font-family: var(--mono);
+	font-size: 11px;
+	font-weight: 600;
+}
+.missing-covers-hint {
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.45;
+}
+.missing-covers-list {
+	display: grid;
+	gap: 12px;
+	margin: 0;
+	padding: 0 14px 14px;
+	list-style: none;
+}
+.missing-cover-card {
+	display: grid;
+	gap: 12px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--paper-card);
+}
+.missing-cover-head {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+}
+.missing-cover-thumb {
+	width: 52px;
+	height: 74px;
+	flex: none;
+}
+.missing-cover-meta {
+	min-width: 0;
+	display: grid;
+	gap: 4px;
+	align-content: start;
+}
+.missing-cover-meta h3 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+.missing-cover-meta p {
+	margin: 0 0 4px;
+	color: var(--muted);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.missing-cover-meta .small-button {
+	width: fit-content;
+}
+
 /* Bookshelf Toolbar & Pagination */
 .shelf-toolbar {
 	display: flex;
@@ -1826,10 +1921,13 @@ a {
 }
 .shelf-toolbar-right {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 10px;
+	min-width: 0;
 }
 .shelf-sort-select {
+	max-width: 100%;
 	height: 32px;
 	padding: 0 10px;
 	border: 1px solid var(--line);

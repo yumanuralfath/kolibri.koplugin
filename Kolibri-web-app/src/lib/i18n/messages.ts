@@ -54,6 +54,10 @@ export const messages = {
 		alsoUpdateMetadata: 'Juga perbarui judul & penulis dari hasil',
 		noCoverFound: 'Sampul tidak ditemukan. Coba kata kunci lain atau isi URL manual.',
 		coverSearchFailed: 'Pencarian sampul gagal. Periksa koneksi internet.',
+		missingCoversTitle: 'Buku tanpa sampul',
+		missingCoversHint:
+			'Sampul otomatis tidak tersedia. Cari ulang, tempel URL, atau upload gambar secara manual.',
+		missingCoversOpenDetail: 'Buka detail',
 
 		// Detail stats
 		progressCaption: '📖 Baca sampai mana',
@@ -260,6 +264,10 @@ export const messages = {
 		alsoUpdateMetadata: 'Also update title & author from result',
 		noCoverFound: 'No cover found. Try different keywords or paste a URL.',
 		coverSearchFailed: 'Cover search failed. Check your internet connection.',
+		missingCoversTitle: 'Books without a cover',
+		missingCoversHint:
+			'Automatic cover fetch failed or was skipped. Search again, paste a URL, or upload an image.',
+		missingCoversOpenDetail: 'Open details',
 
 		progressCaption: '📖 Reading progress',
 		pagesRecorded: '{n} pages recorded as read',

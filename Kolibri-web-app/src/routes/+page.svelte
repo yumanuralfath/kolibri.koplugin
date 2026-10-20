@@ -84,6 +84,11 @@
 	let readingBooks = $derived(library.books.filter((book) => book.status === 'reading'));
 	let finishedBooks = $derived(library.books.filter((book) => book.status === 'finished'));
 	let pausedBooks = $derived(library.books.filter((book) => book.status === 'paused'));
+	let booksWithoutCover = $derived(
+		library.books
+			.filter((book) => !book.coverUrl?.trim())
+			.sort((a, b) => new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime())
+	);
 	let highlights = $derived(
 		library.books.reduce((total, book) => total + book.highlights.length, 0)
 	);
@@ -108,6 +113,10 @@
 
 	$effect(() => {
 		if (selectedBook) ensureBookDrafts(selectedBook);
+	});
+
+	$effect(() => {
+		for (const book of booksWithoutCover) ensureBookDrafts(book);
 	});
 
 	// Highlight Inline Editing State
@@ -198,7 +207,7 @@
 	type ShelfFilter = 'all' | 'reading' | 'finished' | 'paused';
 	let shelfFilter = $state<ShelfFilter>('all');
 	let shelfSearch = $state('');
-	let shelfSortBy = $state<'progress-desc' | 'recent' | 'title' | 'progress-asc'>('progress-desc');
+	let shelfSortBy = $state<'progress-desc' | 'recent' | 'title' | 'progress-asc'>('recent');
 	let shelfPage = $state(1);
 	const booksPerPage = 6;
 
@@ -924,13 +933,138 @@
 									onchange={() => { shelfPage = 1; }}
 									aria-label="Urutkan rak buku"
 								>
-									<option value="progress-desc">📊 Persen Tertinggi (Default)</option>
-									<option value="recent">⏱ Terakhir Dibaca</option>
+									<option value="recent">⏱ Terakhir Dibaca (Default)</option>
+									<option value="progress-desc">📊 Persen Tertinggi</option>
 									<option value="title">🔤 Judul (A-Z)</option>
 									<option value="progress-asc">📉 Persen Terendah</option>
 								</select>
 							</div>
 						</div>
+
+						{#if booksWithoutCover.length > 0}
+							<details class="missing-covers" open>
+								<summary class="missing-covers-summary">
+									<span class="missing-covers-title">
+										{t('missingCoversTitle')}
+										<strong>{booksWithoutCover.length}</strong>
+									</span>
+									<span class="missing-covers-hint">{t('missingCoversHint')}</span>
+								</summary>
+								<ul class="missing-covers-list">
+									{#each booksWithoutCover as book (book.id)}
+										<li class="missing-cover-card">
+											<div class="missing-cover-head">
+												<div class="cover-frame missing-cover-thumb">
+													<div class="cover-placeholder">
+														<span>{book.title.split(/\s+/).slice(0, 3).join(' ')}</span>
+														<i>{book.authors[0] ?? 'KOReader'}</i>
+													</div>
+												</div>
+												<div class="missing-cover-meta">
+													<h3>{book.title}</h3>
+													<p>{book.authors.join(', ') || t('unknownAuthor')}</p>
+													<button
+														type="button"
+														class="small-button"
+														onclick={() => {
+															selectedBookId = book.id;
+															bookModalHighlightPage = 1;
+														}}
+													>
+														{t('missingCoversOpenDetail')}
+													</button>
+												</div>
+											</div>
+											<div class="cover-tools">
+												<div class="cover-search-row">
+													<input
+														type="search"
+														aria-label={t('coverSearchQuery')}
+														placeholder={t('coverSearchHint')}
+														bind:value={coverQueryDrafts[book.id]}
+														onkeydown={(e) => {
+															if (e.key === 'Enter') {
+																e.preventDefault();
+																findCovers(book);
+															}
+														}}
+													/>
+													<button
+														type="button"
+														class="small-button"
+														disabled={pending === `cover-${book.id}`}
+														onclick={() => findCovers(book)}
+													>
+														{pending === `cover-${book.id}` ? t('searching') : t('autoSearch')}
+													</button>
+												</div>
+												<label class="cover-meta-toggle">
+													<input type="checkbox" bind:checked={applyMetaFromCover} />
+													<span>{t('alsoUpdateMetadata')}</span>
+												</label>
+												<div class="manual-cover">
+													<input
+														aria-label={`${t('imageUrl')} ${book.title}`}
+														placeholder="https://…"
+														bind:value={coverDrafts[book.id]}
+													/>
+													<button
+														type="button"
+														class="small-button"
+														disabled={pending === book.id}
+														onclick={() =>
+															save({
+																bookId: book.id,
+																coverUrl: coverDrafts[book.id]?.trim() || null
+															})}
+													>
+														{t('saveUrl')}
+													</button>
+												</div>
+												<div class="cover-tools-row">
+													<label
+														class="small-button upload-btn"
+														class:disabled={pending === `upload-${book.id}`}
+													>
+														{pending === `upload-${book.id}` ? t('uploading') : t('uploadImage')}
+														<input
+															type="file"
+															accept="image/*"
+															hidden
+															disabled={pending === `upload-${book.id}`}
+															onchange={(e) => {
+																uploadCover(book, e.currentTarget.files?.[0]);
+																e.currentTarget.value = '';
+															}}
+														/>
+													</label>
+												</div>
+												{#if coverResults[book.id]?.length}
+													<div class="cover-options">
+														{#each coverResults[book.id] as cover (cover.url)}
+															<button
+																type="button"
+																class="cover-option"
+																title={`${cover.title} — ${cover.author}`}
+																onclick={() => applyCoverResult(book, cover)}
+															>
+																<img src={cover.url} alt="" />
+																<span class="cover-option-meta">
+																	<strong class="clamp-2">{cover.title}</strong>
+																	{#if cover.source}
+																		<em class="cover-source">{sourceLabel(cover.source)}</em>
+																	{/if}
+																</span>
+															</button>
+														{/each}
+													</div>
+												{/if}
+											</div>
+										</li>
+									{/each}
+								</ul>
+							</details>
+						{/if}
 
 						{#if processedBooks.length === 0}
 							<div class="empty-shelf" style="min-height: 180px;">

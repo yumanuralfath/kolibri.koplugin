@@ -82,7 +82,13 @@
 			return time(b.lastReadAt) - time(a.lastReadAt);
 		},
 		oldest: (a, b) => time(a.lastReadAt) - time(b.lastReadAt),
-		progress: (a, b) => pct(b) - pct(a) || time(b.lastReadAt) - time(a.lastReadAt),
+		// progres tertinggi: yang belum selesai dulu; yang finished ke paling bawah
+		progress: (a, b) => {
+			const fa = a.status === 'finished' ? 1 : 0;
+			const fb = b.status === 'finished' ? 1 : 0;
+			if (fa !== fb) return fa - fb;
+			return pct(b) - pct(a) || time(b.lastReadAt) - time(a.lastReadAt);
+		},
 		time: (a, b) => (b.totalReadTime ?? 0) - (a.totalReadTime ?? 0) || time(b.lastReadAt) - time(a.lastReadAt)
 	};
 
@@ -595,10 +601,12 @@
 	}
 	.hero-title {
 		margin: 0;
-		font-size: clamp(40px, 7vw, 57px);
+		font-size: clamp(28px, 7vw, 57px);
 		line-height: 1.12;
 		font-weight: 400;
 		letter-spacing: -0.01em;
+		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 	.hero-text {
 		max-width: 56ch;
@@ -647,7 +655,7 @@
 	/* grid buku */
 	.book-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(min(168px, 100%), 1fr));
 		gap: 24px 16px;
 		margin: 0;
 		padding: 0;
@@ -709,7 +717,7 @@
 	/* kutipan */
 	.quote-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
 		gap: 16px;
 		margin: 0;
 		padding: 0;
@@ -892,18 +900,81 @@
 	}
 
 	@media (max-width: 600px) {
+		.hero {
+			padding: 20px 0 4px;
+		}
+		.hero-text {
+			margin: 10px 0 16px;
+		}
+		.toolbar-row {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.toolbar-row :global(.md-chips) {
+			width: 100%;
+		}
+		.toolbar-row :global(.md-select),
+		.selects :global(.md-select) {
+			width: 100%;
+			max-width: none;
+		}
+		.toolbar-row :global(.md-select select),
+		.selects :global(.md-select select) {
+			flex: 1;
+			min-width: 0;
+			max-width: none;
+		}
+		.selects {
+			width: 100%;
+			flex-direction: column;
+		}
 		.book-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 16px 8px;
 		}
+		.book {
+			padding: 4px;
+			gap: 8px;
+		}
+		.book-info {
+			padding: 0 2px 2px;
+		}
+		.badges :global(.md-badge) {
+			max-width: 100%;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
 		.quote-grid {
-			grid-template-columns: 1fr;
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.quote {
+			padding: 16px;
+			min-width: 0;
+		}
+		.quote blockquote {
+			overflow-wrap: anywhere;
+			word-break: break-word;
+		}
+		.facts {
+			grid-template-columns: minmax(0, 1fr);
 		}
 		.dlg-head {
 			padding: 16px 8px 8px 16px;
+			gap: 12px;
+		}
+		.dlg-cover {
+			width: 64px;
+		}
+		.dlg-title h2 {
+			overflow-wrap: anywhere;
+			word-break: break-word;
 		}
 		.dlg-body {
 			padding: 0 16px 16px;
+		}
+		.private-card {
+			padding: 28px 16px;
+			width: 100%;
 		}
 	}
 </style>
