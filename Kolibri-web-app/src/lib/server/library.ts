@@ -95,14 +95,25 @@ export function sessionProgressIndex(sessions: ReadingSession[]): {
 	maxTotalByBook: Map<string, number>;
 	firstByBook: Map<string, number>;
 	lastEndByBook: Map<string, number>;
+	secondsByBook: Map<string, number>;
+	pagesByBook: Map<string, Set<number>>;
 } {
 	const latestByBook = new Map<string, LatestSession>();
 	const maxTotalByBook = new Map<string, number>();
 	const firstByBook = new Map<string, number>();
 	const lastEndByBook = new Map<string, number>();
+	const secondsByBook = new Map<string, number>();
+	const pagesByBook = new Map<string, Set<number>>();
 	for (const session of sessions) {
 		if (!session.bookId || !Number.isFinite(session.startTime) || session.startTime <= 0) continue;
 		const end = session.startTime + Math.max(0, session.duration || 0);
+		secondsByBook.set(
+			session.bookId,
+			(secondsByBook.get(session.bookId) ?? 0) + Math.max(0, session.duration || 0)
+		);
+		let pageSet = pagesByBook.get(session.bookId);
+		if (!pageSet) pagesByBook.set(session.bookId, (pageSet = new Set<number>()));
+		pageSet.add(session.page);
 		const first = firstByBook.get(session.bookId);
 		if (first === undefined || session.startTime < first) firstByBook.set(session.bookId, session.startTime);
 		const last = lastEndByBook.get(session.bookId);
@@ -119,7 +130,7 @@ export function sessionProgressIndex(sessions: ReadingSession[]): {
 			maxTotalByBook.set(session.bookId, session.totalPages);
 		}
 	}
-	return { latestByBook, maxTotalByBook, firstByBook, lastEndByBook };
+	return { latestByBook, maxTotalByBook, firstByBook, lastEndByBook, secondsByBook, pagesByBook };
 }
 
 /** True bila page sesi terakhir sudah di (atau lewat) akhir buku. */
@@ -208,9 +219,22 @@ export function repairProgressFromSessions(books: Book[], sessions: ReadingSessi
  * @returns true jika ada field buku yang diubah (perlu disimpan ulang).
  */
 function applySessionDates(books: Book[], sessions: ReadingSession[]): boolean {
-	const { firstByBook, lastEndByBook } = sessionProgressIndex(sessions);
+	const { firstByBook, lastEndByBook, secondsByBook, pagesByBook } = sessionProgressIndex(sessions);
 	let repaired = false;
 	for (const book of books) {
+		// Total waktu & halaman dibaca: kolom total_read_time/total_read_pages di tabel `book`
+		// KOReader sering basi (mis. hanya ~23 detik padahal ada 162 sesi). Sesi adalah sumber
+		// kebenaran, jadi ambil yang lebih besar antara nilai tersimpan dan hasil jumlah sesi.
+		const sessionSeconds = secondsByBook.get(book.id);
+		if (sessionSeconds !== undefined && sessionSeconds > (book.totalReadTime ?? 0)) {
+			book.totalReadTime = sessionSeconds;
+			repaired = true;
+		}
+		const sessionPages = pagesByBook.get(book.id)?.size;
+		if (sessionPages !== undefined && sessionPages > (book.totalReadPages ?? 0)) {
+			book.totalReadPages = sessionPages;
+			repaired = true;
+		}
 		const f = firstByBook.get(book.id);
 		const l = lastEndByBook.get(book.id);
 		if (f !== undefined) {
