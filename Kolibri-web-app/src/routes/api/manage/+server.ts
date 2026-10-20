@@ -28,6 +28,8 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		bookId?: string;
 		visible?: boolean;
 		coverUrl?: string | null;
+		title?: string;
+		authors?: string | string[];
 		published?: boolean;
 		displayName?: string | null;
 		startedAt?: string;
@@ -61,6 +63,23 @@ export const PATCH: RequestHandler = async ({ request }) => {
 					const nextCover = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
 					if (book.coverUrl !== nextCover) staleCover = book.coverUrl;
 					book.coverUrl = body.coverUrl ? String(body.coverUrl).slice(0, 2000) : undefined;
+				}
+				if (body.title !== undefined) {
+					const title = String(body.title).trim().slice(0, 500);
+					if (title) {
+						book.title = title;
+						book.titleLocked = true;
+					}
+				}
+				if (body.authors !== undefined) {
+					const list = Array.isArray(body.authors)
+						? body.authors
+						: String(body.authors)
+								.split(/[,;]/)
+								.map((a) => a.trim())
+								.filter(Boolean);
+					book.authors = list.map((a) => String(a).slice(0, 200)).slice(0, 20);
+					book.authorsLocked = true;
 				}
 				if (body.startedAt) book.startedAt = String(body.startedAt);
 				if (body.finishedAt !== undefined) book.finishedAt = body.finishedAt ? String(body.finishedAt) : undefined;

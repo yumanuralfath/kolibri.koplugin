@@ -56,6 +56,10 @@ export type Book = {
 	id: string;
 	title: string;
 	authors: string[];
+	/** true bila judul diedit manual di web — sync KOReader tidak menimpa. */
+	titleLocked?: boolean;
+	/** true bila penulis diedit manual di web — sync KOReader tidak menimpa. */
+	authorsLocked?: boolean;
 	series?: string;
 	language?: string;
 	totalPages: number;

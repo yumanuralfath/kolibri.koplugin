@@ -19,6 +19,8 @@
 		id: string;
 		title: string;
 		authors: string[];
+		titleLocked?: boolean;
+		authorsLocked?: boolean;
 		series?: string;
 		language?: string;
 		totalPages: number;
@@ -49,7 +51,12 @@
 		publishId?: string;
 		displayName?: string;
 	};
-	type Cover = { title: string; author: string; url: string };
+	type Cover = {
+		title: string;
+		author: string;
+		url: string;
+		source?: 'openlibrary' | 'googlebooks';
+	};
 
 	let library = $state<Library>({ books: [], readingSessions: [], published: false });
 	let locale = $derived(getLocale());
@@ -66,6 +73,10 @@
 	let successMessage = $state('');
 	let coverDrafts = $state<Record<string, string>>({});
 	let coverResults = $state<Record<string, Cover[]>>({});
+	let coverQueryDrafts = $state<Record<string, string>>({});
+	let applyMetaFromCover = $state(true);
+	let titleDrafts = $state<Record<string, string>>({});
+	let authorsDrafts = $state<Record<string, string>>({});
 	let pending = $state('');
 	let publicUrl = $derived(
 		library.published && typeof window !== 'undefined' ? `${window.location.origin}/public` : ''
@@ -85,6 +96,19 @@
 	let selectedBook = $derived(library.books.find((b) => b.id === selectedBookId) ?? null);
 	let bookModalHighlightPage = $state(1);
 	const bookHighlightsPerPage = 4;
+
+	function ensureBookDrafts(book: Book) {
+		if (titleDrafts[book.id] === undefined) titleDrafts[book.id] = book.title;
+		if (authorsDrafts[book.id] === undefined) authorsDrafts[book.id] = book.authors.join(', ');
+		if (coverQueryDrafts[book.id] === undefined) {
+			coverQueryDrafts[book.id] = [book.title, book.authors[0]].filter(Boolean).join(' ');
+		}
+		if (coverDrafts[book.id] === undefined) coverDrafts[book.id] = book.coverUrl ?? '';
+	}
+
+	$effect(() => {
+		if (selectedBook) ensureBookDrafts(selectedBook);
+	});
 
 	// Highlight Inline Editing State
 	let editingHighlightId = $state<string | null>(null);
@@ -278,6 +302,8 @@
 		bookId?: string;
 		visible?: boolean;
 		coverUrl?: string | null;
+		title?: string;
+		authors?: string;
 		published?: boolean;
 		displayName?: string | null;
 		status?: 'reading' | 'finished' | 'paused';
@@ -296,11 +322,32 @@
 				displayNameDraft = library.displayName ?? '';
 				successMessage = t('settingsSaved');
 			}
+			if (patch.bookId && (patch.title !== undefined || patch.authors !== undefined)) {
+				const updated = library.books.find((b) => b.id === patch.bookId);
+				if (updated) {
+					titleDrafts[patch.bookId] = updated.title;
+					authorsDrafts[patch.bookId] = updated.authors.join(', ');
+					coverQueryDrafts[patch.bookId] = [updated.title, updated.authors[0]]
+						.filter(Boolean)
+						.join(' ');
+				}
+				successMessage = t('metadataSaved');
+			}
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan.';
 		} finally {
 			pending = '';
 		}
+	}
+
+	async function saveMetadata(book: Book) {
+		const title = (titleDrafts[book.id] ?? book.title).trim();
+		const authors = (authorsDrafts[book.id] ?? book.authors.join(', ')).trim();
+		if (!title) {
+			errorMessage = 'Judul tidak boleh kosong.';
+			return;
+		}
+		await save({ bookId: book.id, title, authors });
 	}
 
 	async function updateHighlight(
@@ -494,19 +541,50 @@
 		}
 	}
 
-	async function findCovers(book: Book) {
+	async function findCovers(book: Book, queryOverride?: string) {
 		pending = `cover-${book.id}`;
+		errorMessage = '';
+		const query =
+			(queryOverride ?? coverQueryDrafts[book.id] ?? book.title).trim() || book.title;
+		coverQueryDrafts[book.id] = query;
 		try {
-			const response = await fetch(`/api/covers?q=${encodeURIComponent(book.title)}`);
+			const response = await fetch(`/api/covers?q=${encodeURIComponent(query)}`);
 			const result = await response.json();
 			coverResults[book.id] = result.covers ?? [];
-			if (!coverResults[book.id].length)
-				errorMessage = 'Sampul tidak ditemukan. Coba judul lain atau isi URL manual.';
+			if (!coverResults[book.id].length) errorMessage = t('noCoverFound');
 		} catch {
-			errorMessage = 'Pencarian sampul gagal. Periksa koneksi internet.';
+			errorMessage = t('coverSearchFailed');
 		} finally {
 			pending = '';
 		}
+	}
+
+	async function applyCoverResult(book: Book, cover: Cover, withMeta = false) {
+		coverDrafts[book.id] = cover.url;
+		const patch: {
+			bookId: string;
+			coverUrl: string;
+			title?: string;
+			authors?: string;
+		} = { bookId: book.id, coverUrl: cover.url };
+		if (withMeta || applyMetaFromCover) {
+			if (cover.title?.trim()) {
+				patch.title = cover.title.trim();
+				titleDrafts[book.id] = patch.title;
+			}
+			if (cover.author?.trim()) {
+				patch.authors = cover.author.trim();
+				authorsDrafts[book.id] = patch.authors;
+			}
+		}
+		await save(patch);
+		coverResults[book.id] = [];
+	}
+
+	function sourceLabel(source?: Cover['source']): string {
+		if (source === 'googlebooks') return t('sourceGoogleBooks');
+		if (source === 'openlibrary') return t('sourceOpenLibrary');
+		return '';
 	}
 
 	async function fetchBulkCovers() {
@@ -921,14 +999,36 @@
 											<details class="cover-editor" onclick={(e) => e.stopPropagation()}>
 												<summary>Change cover</summary>
 												<div class="cover-tools">
-													<button
-														class="small-button"
-														disabled={pending === `cover-${book.id}`}
-														onclick={() => findCovers(book)}
-														>{pending === `cover-${book.id}`
-															? 'Searching…'
-															: 'Find automatically'}</button
-													>
+													<div class="cover-search-row">
+														<input
+															type="search"
+															aria-label={t('coverSearchQuery')}
+															placeholder={t('coverSearchHint')}
+															value={coverQueryDrafts[book.id] ??
+																[book.title, book.authors[0]].filter(Boolean).join(' ')}
+															oninput={(e) => {
+																coverQueryDrafts[book.id] = e.currentTarget.value;
+															}}
+															onkeydown={(e) => {
+																if (e.key === 'Enter') {
+																	e.preventDefault();
+																	findCovers(book);
+																}
+															}}
+														/>
+														<button
+															class="small-button"
+															disabled={pending === `cover-${book.id}`}
+															onclick={() => findCovers(book)}
+															>{pending === `cover-${book.id}`
+																? t('searching')
+																: t('autoSearch')}</button
+														>
+													</div>
+													<label class="cover-meta-toggle">
+														<input type="checkbox" bind:checked={applyMetaFromCover} />
+														<span>{t('alsoUpdateMetadata')}</span>
+													</label>
 													<div class="manual-cover">
 														<input
 															aria-label={`Cover image URL for ${book.title}`}
@@ -942,15 +1042,21 @@
 														>
 													</div>
 													{#if coverResults[book.id]?.length}<div class="cover-options">
-															{#each coverResults[book.id] as cover (cover.url)}<button
+															{#each coverResults[book.id] as cover (cover.url)}
+																<button
 																	class="cover-option"
 																	title={`${cover.title} — ${cover.author}`}
-																	onclick={() => {
-																		coverDrafts[book.id] = cover.url;
-																		save({ bookId: book.id, coverUrl: cover.url });
-																		coverResults[book.id] = [];
-																	}}><img src={cover.url} alt="" /><span>{cover.title}</span></button
-																>{/each}
+																	onclick={() => applyCoverResult(book, cover)}
+																>
+																	<img src={cover.url} alt="" />
+																	<span class="cover-option-meta">
+																		<strong class="clamp-2">{cover.title}</strong>
+																		{#if cover.source}<em class="cover-source"
+																			>{sourceLabel(cover.source)}</em
+																		>{/if}
+																	</span>
+																</button>
+															{/each}
 														</div>{/if}
 												</div>
 											</details>
@@ -1183,8 +1289,34 @@
 													: t('statusReading')}
 										</small>
 									</div>
-									<h2>{selectedBook.title}</h2>
-									<p>{selectedBook.authors.join(', ') || t('unknownAuthor')}</p>
+									<div class="metadata-editor">
+										<span class="status-control-label">{t('editMetadata')}</span>
+										<label class="metadata-field">
+											<span>{t('bookTitle')}</span>
+											<input
+												type="text"
+												aria-label={t('bookTitle')}
+												bind:value={titleDrafts[selectedBook.id]}
+											/>
+										</label>
+										<label class="metadata-field">
+											<span>{t('bookAuthor')}</span>
+											<input
+												type="text"
+												aria-label={t('bookAuthor')}
+												placeholder={t('bookAuthorsHint')}
+												bind:value={authorsDrafts[selectedBook.id]}
+											/>
+										</label>
+										<button
+											type="button"
+											class="small-button"
+											disabled={pending === selectedBook.id}
+											onclick={() => saveMetadata(selectedBook)}
+										>
+											{t('saveMetadata')}
+										</button>
+									</div>
 									<button
 										type="button"
 										class="highlight-visibility-badge {selectedBook.visible ? 'is-public' : 'is-private'}"
@@ -1245,6 +1377,31 @@
 												}}>{t('saveUrl')}</button
 											>
 										</div>
+										<div class="cover-search-row">
+											<input
+												type="search"
+												aria-label={t('coverSearchQuery')}
+												placeholder={t('coverSearchHint')}
+												bind:value={coverQueryDrafts[selectedBook.id]}
+												onkeydown={(e) => {
+													if (e.key === 'Enter') {
+														e.preventDefault();
+														findCovers(selectedBook);
+													}
+												}}
+											/>
+											<button
+												type="button"
+												class="small-button"
+												disabled={pending === `cover-${selectedBook.id}`}
+												onclick={() => findCovers(selectedBook)}
+												>{pending === `cover-${selectedBook.id}` ? t('searching') : t('autoSearch')}</button
+											>
+										</div>
+										<label class="cover-meta-toggle">
+											<input type="checkbox" bind:checked={applyMetaFromCover} />
+											<span>{t('alsoUpdateMetadata')}</span>
+										</label>
 										<div class="cover-tools-row">
 											<label class="small-button upload-btn" class:disabled={pending === `upload-${selectedBook.id}`}>
 												{pending === `upload-${selectedBook.id}` ? t('uploading') : t('uploadImage')}
@@ -1259,13 +1416,6 @@
 													}}
 												/>
 											</label>
-											<button
-												type="button"
-												class="small-button"
-												disabled={pending === `cover-${selectedBook.id}`}
-												onclick={() => findCovers(selectedBook)}
-												>{pending === `cover-${selectedBook.id}` ? t('searching') : t('autoSearch')}</button
-											>
 											{#if selectedBook.coverUrl}<button
 													type="button"
 													class="small-button"
@@ -1276,16 +1426,21 @@
 												>{/if}
 										</div>
 										{#if coverResults[selectedBook.id]?.length}<div class="cover-options">
-												{#each coverResults[selectedBook.id] as cover (cover.url)}<button
+												{#each coverResults[selectedBook.id] as cover (cover.url)}
+													<button
 														type="button"
 														class="cover-option"
-														title={`${cover.title} — ${cover.author}`}
-														onclick={() => {
-															coverDrafts[selectedBook.id] = cover.url;
-															save({ bookId: selectedBook.id, coverUrl: cover.url });
-															coverResults[selectedBook.id] = [];
-														}}><img src={cover.url} alt="" /><span>{cover.title}</span></button
-													>{/each}
+														title={`${cover.title} — ${cover.author}${sourceLabel(cover.source) ? ` · ${sourceLabel(cover.source)}` : ''}`}
+														onclick={() => applyCoverResult(selectedBook, cover)}
+													>
+														<img src={cover.url} alt="" />
+														<span class="cover-option-meta">
+															<strong class="clamp-2">{cover.title}</strong>
+															{#if cover.author}<i class="clamp-1">{cover.author}</i>{/if}
+															{#if cover.source}<em class="cover-source">{sourceLabel(cover.source)}</em>{/if}
+														</span>
+													</button>
+												{/each}
 											</div>{/if}
 									</div>
 									<button

@@ -16,8 +16,8 @@ Dashboard bacaan pribadi untuk [KOReader](https://koreader.rocks). Plugin KORead
 - Rak **sedang dibaca / selesai / dijeda** dengan progres halaman.
 - Statistik dari riwayat KOReader: halaman per hari, waktu baca per bulan, pola hari, hari aktif, hari terpanjang.
 - Highlight dan catatan, yang bisa disembunyikan atau diedit per item.
-- **Detail per buku**: status baca, tanggal tamat, visibilitas di rak publik, hapus buku, dan **ganti sampul**.
-- **Sampul buku**: tempel URL gambar, upload file (JPG/PNG/WebP/GIF, maks 4 MB), cari otomatis lewat Open Library, atau hapus sampul.
+- **Detail per buku**: status baca, tanggal tamat, visibilitas di rak publik, hapus buku, **edit judul/penulis**, dan **ganti sampul**.
+- **Sampul buku**: tempel URL gambar, upload file (JPG/PNG/WebP/GIF, maks 4 MB), cari otomatis di Open Library + Google Books (bisa sekalian ambil judul/penulis), atau hapus sampul.
 - **Rak publik** di `/public`: hanya buku yang ditandai tampil, dan highlight yang disembunyikan tidak pernah dikirim.
 - Tema terang/gelap.
 
@@ -29,6 +29,7 @@ Database embedded sudah dihapus. Semua data (buku, sesi baca, pengaturan, dan sa
 | --- | --- |
 | `TURSO_DATABASE_URL` | URL database, contoh `libsql://nama-db-org.turso.io` |
 | `TURSO_AUTH_TOKEN` | Token Turso |
+| `GOOGLE_BOOKS_API_KEY` | Opsional — API key Google Books agar pencarian sampul tidak kena kuota bersama |
 
 Buat database dan token:
 
@@ -88,9 +89,9 @@ Di dashboard, aktifkan **Publish**. Halaman `/public` menampilkan buku yang visi
 | `PATCH /api/auth` | sesi | Ganti password |
 | `POST /api/sync` | `Authorization: Bearer <password>` | Terima buku, statistik, dan highlight dari plugin |
 | `GET /api/manage` | sesi | Ambil seluruh library |
-| `PATCH /api/manage` | sesi | Ubah visibilitas, status, tanggal, `coverUrl`, highlight, publish |
+| `PATCH /api/manage` | sesi | Ubah visibilitas, status, tanggal, judul, penulis, `coverUrl`, highlight, publish |
 | `DELETE /api/manage` | sesi | Hapus buku (beserta file sampul uploadnya) |
-| `GET /api/covers?q=` | - | Cari sampul di Open Library |
+| `GET /api/covers?q=` | - | Cari sampul di Open Library + Google Books |
 | `POST /api/covers` | sesi | Cari sampul otomatis untuk buku yang belum punya |
 | `POST /api/covers/upload?bookId=` | sesi | Upload gambar sampul (body = bytes gambar) |
 | `GET /api/covers/file/<nama>` | - | Sajikan sampul yang diupload |

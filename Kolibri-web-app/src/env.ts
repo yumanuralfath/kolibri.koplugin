@@ -8,5 +8,9 @@ export const variables = defineEnvVars({
 	},
 	TURSO_AUTH_TOKEN: {
 		schema: (value) => value ?? ''
+	},
+	/** Opsional — kuota Google Books tanpa key sering habis; isi key gratis dari Google Cloud. */
+	GOOGLE_BOOKS_API_KEY: {
+		schema: (value) => value ?? ''
 	}
 });

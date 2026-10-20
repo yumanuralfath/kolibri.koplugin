@@ -313,14 +313,21 @@ export const POST: RequestHandler = async ({ request }) => {
 
 			const incomingReadPages = finiteNumber(metadata.total_read_pages);
 			const incomingReadTime = finiteNumber(metadata.total_read_time);
+			const syncedAuthors = parseAuthors(metadata.authors ?? metadata.author);
 			const book: Book = {
 				id: bookId,
-				title: String(
-					metadata.title ?? existing?.title ?? (isCurrentBook ? title : 'Untitled')
-				).slice(0, 500),
-				authors: parseAuthors(metadata.authors ?? metadata.author).length
-					? parseAuthors(metadata.authors ?? metadata.author)
-					: (existing?.authors ?? []),
+				title: existing?.titleLocked
+					? existing.title
+					: String(
+							metadata.title ?? existing?.title ?? (isCurrentBook ? title : 'Untitled')
+						).slice(0, 500),
+				authors: existing?.authorsLocked
+					? existing.authors
+					: syncedAuthors.length
+						? syncedAuthors
+						: (existing?.authors ?? []),
+				titleLocked: existing?.titleLocked,
+				authorsLocked: existing?.authorsLocked,
 				series: metadata.series ? String(metadata.series).slice(0, 300) : existing?.series,
 				language: metadata.language ? String(metadata.language).slice(0, 40) : existing?.language,
 				totalPages: bookTotalPages > 0 ? bookTotalPages : (existing?.totalPages ?? 0),
