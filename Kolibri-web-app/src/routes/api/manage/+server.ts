@@ -29,6 +29,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		visible?: boolean;
 		coverUrl?: string | null;
 		published?: boolean;
+		displayName?: string | null;
 		startedAt?: string;
 		finishedAt?: string;
 		status?: 'reading' | 'finished' | 'paused';
@@ -47,6 +48,10 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		if (typeof body.published === 'boolean') {
 			data.published = body.published;
 			if (body.published && !data.publishId) data.publishId = randomUUID().replaceAll('-', '');
+		}
+		if (body.displayName !== undefined) {
+			const name = body.displayName == null ? '' : String(body.displayName).trim().slice(0, 80);
+			data.displayName = name || undefined;
 		}
 		if (body.bookId) {
 			const book = data.books.find((item) => item.id === body.bookId);

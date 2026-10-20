@@ -3,108 +3,198 @@
 	import Chart from 'chart.js/auto';
 	import Icon, { type IconName } from './Icon.svelte';
 	import { formatHours, type Stats } from '../../stats';
+	import { getLocale, t } from '../../i18n/i18n.svelte';
 
 	let { stats }: { stats: Stats } = $props();
 
-	const weekdayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 	const weekdayOrder = [1, 2, 3, 4, 5, 6, 0];
+	let locale = $derived(getLocale());
+	let localeTag = $derived(locale === 'en' ? 'en-US' : 'id-ID');
+	let weekdayNames = $derived([
+		t('weekdaySun'),
+		t('weekdayMon'),
+		t('weekdayTue'),
+		t('weekdayWed'),
+		t('weekdayThu'),
+		t('weekdayFri'),
+		t('weekdaySat')
+	]);
 
 	type Tile = { icon: IconName; label: string; value: string; hint?: string };
 
 	let collectionTiles = $derived.by<Tile[]>(() => {
 		const c = stats.counts;
 		const tiles: Tile[] = [
-			{ icon: 'book', label: 'Total buku', value: String(c.books), hint: `${c.reading} dibaca · ${c.finished} tamat · ${c.paused} dijeda` },
-			{ icon: 'checkCircle', label: 'Buku tamat', value: String(c.finished), hint: `${c.completionRate}% dari koleksi` },
-			{ icon: 'trophy', label: 'Tamat tahun ini', value: String(stats.finishedThisYear), hint: stats.finishedPages ? `${stats.finishedPages.toLocaleString('id-ID')} halaman buku tamat` : undefined }
+			{
+				icon: 'book',
+				label: t('totalBooks'),
+				value: String(c.books),
+				hint: t('collectionHint', { reading: c.reading, finished: c.finished, paused: c.paused })
+			},
+			{
+				icon: 'checkCircle',
+				label: t('booksFinishedLabel'),
+				value: String(c.finished),
+				hint: t('completionHint', { n: c.completionRate })
+			},
+			{
+				icon: 'trophy',
+				label: t('finishedThisYear'),
+				value: String(stats.finishedThisYear),
+				hint: stats.finishedPages
+					? t('finishedPagesHint', { n: stats.finishedPages.toLocaleString(localeTag) })
+					: undefined
+			}
 		];
 		if (stats.avgFinishDays > 0) {
 			tiles.push({
 				icon: 'hourglass',
-				label: 'Rata-rata tamat',
-				value: `${stats.avgFinishDays} hari`,
-				hint: stats.fastest && stats.slowest ? `Tercepat ${stats.fastest.days} hari · terlama ${stats.slowest.days} hari` : undefined
+				label: t('avgFinish'),
+				value: `${stats.avgFinishDays} ${t('days')}`,
+				hint:
+					stats.fastest && stats.slowest
+						? t('fastSlowHint', { fast: stats.fastest.days, slow: stats.slowest.days })
+						: undefined
 			});
 		}
 		if (c.books - c.finished > 0) {
-			tiles.push({ icon: 'chart', label: 'Progres rata-rata', value: `${stats.avgProgress}%`, hint: 'Pada buku yang belum tamat' });
+			tiles.push({
+				icon: 'chart',
+				label: t('avgProgress'),
+				value: `${stats.avgProgress}%`,
+				hint: t('avgProgressHint')
+			});
 		}
 		tiles.push({
 			icon: 'quote',
-			label: 'Kutipan',
+			label: t('quotes'),
 			value: String(stats.highlights.total),
-			hint: `${stats.highlights.withNotes} dengan catatan pribadi`
+			hint: t('quotesHint', { n: stats.highlights.withNotes })
 		});
 		return tiles;
 	});
 
 	let habitTiles = $derived.by<Tile[]>(() => {
 		const tiles: Tile[] = [
-			{ icon: 'clock', label: 'Total waktu baca', value: formatHours(stats.totalSeconds), hint: stats.sessionCount ? `${stats.sessionCount.toLocaleString('id-ID')} sesi tercatat` : undefined },
-			{ icon: 'page', label: 'Halaman dibaca', value: stats.totalPages.toLocaleString('id-ID'), hint: stats.pagesPerHour ? `≈ ${stats.pagesPerHour} halaman per jam` : undefined },
-			{ icon: 'calendar', label: 'Hari aktif', value: String(stats.activeDays), hint: stats.avgMinutesPerActiveDay ? `Rata-rata ${stats.avgMinutesPerActiveDay} menit per hari` : undefined },
-			{ icon: 'flame', label: 'Streak saat ini', value: `${stats.currentStreak} hari`, hint: `Terpanjang ${stats.longestStreak} hari` },
-			{ icon: 'bolt', label: '7 hari terakhir', value: formatHours(stats.last7), hint: `30 hari terakhir ${formatHours(stats.last30)}` }
+			{
+				icon: 'clock',
+				label: t('totalReadTime'),
+				value: formatHours(stats.totalSeconds, locale),
+				hint: stats.sessionCount
+					? t('sessionsHint', { n: stats.sessionCount.toLocaleString(localeTag) })
+					: undefined
+			},
+			{
+				icon: 'page',
+				label: t('pagesRead'),
+				value: stats.totalPages.toLocaleString(localeTag),
+				hint: stats.pagesPerHour ? t('pagesPerHourHint', { n: stats.pagesPerHour }) : undefined
+			},
+			{
+				icon: 'calendar',
+				label: t('activeDays'),
+				value: String(stats.activeDays),
+				hint: stats.avgMinutesPerActiveDay
+					? t('avgMinutesHint', { n: stats.avgMinutesPerActiveDay })
+					: undefined
+			},
+			{
+				icon: 'flame',
+				label: t('currentStreak'),
+				value: `${stats.currentStreak} ${t('days')}`,
+				hint: t('longestStreakHint', { n: stats.longestStreak })
+			},
+			{
+				icon: 'bolt',
+				label: t('last7Days'),
+				value: formatHours(stats.last7, locale),
+				hint: t('last30Hint', { n: formatHours(stats.last30, locale) })
+			}
 		];
 		if (stats.longestSession > 0) {
-			tiles.push({ icon: 'speed', label: 'Sesi terpanjang', value: formatHours(stats.longestSession), hint: `Rata-rata sesi ${stats.avgSessionMinutes} menit` });
+			tiles.push({
+				icon: 'speed',
+				label: t('longestSession'),
+				value: formatHours(stats.longestSession, locale),
+				hint: t('avgSessionHint', { n: stats.avgSessionMinutes })
+			});
 		}
 		if (stats.peakHour !== null) {
 			tiles.push({
 				icon: 'sun',
-				label: 'Jam favorit',
+				label: t('favouriteHour'),
 				value: `${String(stats.peakHour).padStart(2, '0')}.00`,
-				hint: stats.favouriteBucket ? `Paling sering membaca saat ${stats.favouriteBucket.name.toLowerCase()}` : undefined
+				hint: stats.favouriteBucket
+					? t('bucketHint', { name: stats.favouriteBucket.name.toLowerCase() })
+					: undefined
 			});
 		}
 		if (stats.peakWeekday !== null) {
-			tiles.push({ icon: 'calendar', label: 'Hari favorit', value: weekdayNames[stats.peakWeekday], hint: `Terpanjang dalam sehari ${formatHours(stats.longestDay)}` });
+			tiles.push({
+				icon: 'calendar',
+				label: t('favouriteDay'),
+				value: weekdayNames[stats.peakWeekday],
+				hint: t('longestDayHint', { n: formatHours(stats.longestDay, locale) })
+			});
 		}
 		return tiles;
 	});
 
 	// ---------- grafik ----------
 	type Tab = 'daily' | 'monthly' | 'weekday' | 'hour' | 'finished';
-	const tabs: { id: Tab; label: string; caption: string }[] = [
-		{ id: 'daily', label: '30 hari', caption: 'Menit membaca per hari selama 30 hari terakhir' },
-		{ id: 'monthly', label: '12 bulan', caption: 'Jam membaca per bulan selama 12 bulan terakhir' },
-		{ id: 'weekday', label: 'Hari', caption: 'Total menit membaca berdasarkan hari dalam seminggu' },
-		{ id: 'hour', label: 'Jam', caption: 'Total menit membaca berdasarkan jam dalam sehari' },
-		{ id: 'finished', label: 'Buku tamat', caption: 'Jumlah buku yang tamat per bulan (12 bulan terakhir)' }
-	];
+	const tabs = $derived<{ id: Tab; label: string; caption: string }[]>([
+		{ id: 'daily', label: t('tabDaily'), caption: t('tabDailyCap') },
+		{ id: 'monthly', label: t('tabMonthly'), caption: t('tabMonthlyCap') },
+		{ id: 'weekday', label: t('tabWeekday'), caption: t('tabWeekdayCap') },
+		{ id: 'hour', label: t('tabHour'), caption: t('tabHourCap') },
+		{ id: 'finished', label: t('tabFinished'), caption: t('tabFinishedCap') }
+	]);
 	let tab = $state<Tab>('daily');
 	let canvas = $state<HTMLCanvasElement>();
 	let themeTick = $state(0);
 	let hasSessions = $derived(stats.sessionCount > 0);
 
-	function series(t: Tab): { labels: string[]; data: number[]; unit: string } {
-		switch (t) {
+	function series(tabId: Tab): { labels: string[]; data: number[]; unit: string } {
+		switch (tabId) {
 			case 'daily':
-				return { labels: stats.daily30.map((d) => d.label), data: stats.daily30.map((d) => d.minutes), unit: 'menit' };
+				return {
+					labels: stats.daily30.map((d) => d.label),
+					data: stats.daily30.map((d) => d.minutes),
+					unit: t('unitMinutes')
+				};
 			case 'monthly':
-				return { labels: stats.monthly12.map((m) => m.label), data: stats.monthly12.map((m) => m.hours), unit: 'jam' };
+				return {
+					labels: stats.monthly12.map((m) => m.label),
+					data: stats.monthly12.map((m) => m.hours),
+					unit: t('unitHours')
+				};
 			case 'weekday':
 				return {
 					labels: weekdayOrder.map((i) => weekdayNames[i].slice(0, 3)),
 					data: weekdayOrder.map((i) => Math.round(stats.weekdaySeconds[i] / 60)),
-					unit: 'menit'
+					unit: t('unitMinutes')
 				};
 			case 'hour':
 				return {
 					labels: stats.hourSeconds.map((_, h) => String(h).padStart(2, '0')),
 					data: stats.hourSeconds.map((s) => Math.round(s / 60)),
-					unit: 'menit'
+					unit: t('unitMinutes')
 				};
 			default:
-				return { labels: stats.monthly12.map((m) => m.label), data: stats.monthly12.map((m) => m.finished), unit: 'buku' };
+				return {
+					labels: stats.monthly12.map((m) => m.label),
+					data: stats.monthly12.map((m) => m.finished),
+					unit: t('unitBooks')
+				};
 		}
 	}
 
 	$effect(() => {
 		void themeTick;
+		void locale;
 		if (!canvas) return;
-		const t = tab;
-		const { labels, data, unit } = series(t);
+		const activeTab = tab;
+		const { labels, data, unit } = series(activeTab);
 		const css = getComputedStyle(canvas);
 		const color = (name: string) => css.getPropertyValue(name).trim();
 		const font = { family: 'Roboto Flex, Roboto, sans-serif', size: 12 };
@@ -145,7 +235,12 @@
 					x: {
 						grid: { display: false },
 						border: { display: false },
-						ticks: { color: color('--md-on-surface-variant'), font, maxTicksLimit: t === 'daily' ? 8 : 24, maxRotation: 0 }
+						ticks: {
+							color: color('--md-on-surface-variant'),
+							font,
+							maxTicksLimit: activeTab === 'daily' ? 8 : 24,
+							maxRotation: 0
+						}
 					},
 					y: {
 						beginAtZero: true,
@@ -217,8 +312,8 @@
 	{#if hasSessions}
 		<section class="md-card md-card--outlined panel" aria-label="Grafik aktivitas">
 			<div class="md-tabs" role="tablist">
-				{#each tabs as t (t.id)}
-					<button type="button" role="tab" class="md-tab md-state" aria-selected={tab === t.id} onclick={() => (tab = t.id)}>{t.label}</button>
+				{#each tabs as item (item.id)}
+					<button type="button" role="tab" class="md-tab md-state" aria-selected={tab === item.id} onclick={() => (tab = item.id)}>{item.label}</button>
 				{/each}
 			</div>
 			<p class="md-body-m md-variant caption">{tabs.find((t) => t.id === tab)?.caption}</p>

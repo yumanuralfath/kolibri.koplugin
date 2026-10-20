@@ -466,6 +466,41 @@ a {
 .welcome-row h1 span {
 	color: var(--orange);
 }
+.personalize-row {
+	display: grid;
+	gap: 8px;
+	margin: -8px 0 20px;
+	padding: 13px 15px;
+	border: 1px solid var(--line);
+	background: var(--paper-subtle);
+}
+.display-name-field {
+	display: grid;
+	gap: 6px;
+}
+.display-name-field > span {
+	font-size: 12px;
+	font-weight: 600;
+}
+.display-name-field > small {
+	color: var(--muted);
+	font-size: 10px;
+}
+.display-name-input {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+.display-name-input input {
+	flex: 1;
+	min-width: 160px;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	background: var(--paper);
+	color: inherit;
+	font: inherit;
+}
 .publish-control {
 	display: flex;
 	min-width: 270px;

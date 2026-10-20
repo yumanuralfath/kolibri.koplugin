@@ -1,9 +1,16 @@
-export function formatDateTime(isoString?: string): string {
+import { messages, type Locale } from './i18n/messages';
+
+function pickLocale(locale?: Locale): Locale {
+	return locale === 'en' ? 'en' : 'id';
+}
+
+export function formatDateTime(isoString?: string, locale?: Locale): string {
 	if (!isoString) return '—';
 	try {
 		const d = new Date(isoString);
 		if (isNaN(d.getTime())) return '—';
-		return new Intl.DateTimeFormat('id-ID', {
+		const tag = pickLocale(locale) === 'en' ? 'en-US' : 'id-ID';
+		return new Intl.DateTimeFormat(tag, {
 			weekday: 'short',
 			day: 'numeric',
 			month: 'short',
@@ -16,12 +23,13 @@ export function formatDateTime(isoString?: string): string {
 	}
 }
 
-export function formatDateOnly(isoString?: string): string {
+export function formatDateOnly(isoString?: string, locale?: Locale): string {
 	if (!isoString) return '—';
 	try {
 		const d = new Date(isoString);
 		if (isNaN(d.getTime())) return '—';
-		return new Intl.DateTimeFormat('id-ID', {
+		const tag = pickLocale(locale) === 'en' ? 'en-US' : 'id-ID';
+		return new Intl.DateTimeFormat(tag, {
 			day: 'numeric',
 			month: 'short',
 			year: 'numeric'
@@ -31,13 +39,15 @@ export function formatDateOnly(isoString?: string): string {
 	}
 }
 
-export function formatDuration(seconds?: number): string {
-	if (!seconds || seconds <= 0) return '0 menit';
+export function formatDuration(seconds?: number, locale?: Locale): string {
+	const loc = pickLocale(locale);
+	const m = messages[loc];
+	if (!seconds || seconds <= 0) return m.durationZero;
 	const h = Math.floor(seconds / 3600);
-	const m = Math.round((seconds % 3600) / 60);
-	if (h > 0 && m > 0) return `${h} jam ${m} menit`;
-	if (h > 0) return `${h} jam`;
-	return `${m} menit`;
+	const mins = Math.round((seconds % 3600) / 60);
+	if (h > 0 && mins > 0) return m.hoursMinutes.replace('{h}', String(h)).replace('{m}', String(mins));
+	if (h > 0) return m.hoursOnly.replace('{h}', String(h));
+	return m.minutesOnly.replace('{m}', String(mins));
 }
 
 export function getReadingDaysCount(startedAt?: string, endedAt?: string): number {
@@ -52,4 +62,3 @@ export function getReadingDaysCount(startedAt?: string, endedAt?: string): numbe
 		return 1;
 	}
 }
-

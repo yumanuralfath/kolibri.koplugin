@@ -32,6 +32,7 @@ export const load: PageServerLoad = async () => {
 
 	return {
 		published: library.published,
+		displayName: library.displayName ?? '',
 		books,
 		// Sesi dari buku yang disembunyikan/tidak dipublikasikan tidak ikut dihitung.
 		readingSessions: (library.readingSessions ?? []).filter((s) => visibleIds.has(s.bookId))

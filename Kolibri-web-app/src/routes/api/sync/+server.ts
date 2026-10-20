@@ -33,6 +33,49 @@ function cleanId(value: unknown): string {
 		.slice(0, 120);
 }
 
+/** Prefer finite incoming numbers; never fall through on 0 via falsy `||`. */
+function finiteNumber(value: unknown): number | undefined {
+	const n = Number(value);
+	return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Fix books where progress bled across titles (e.g. currentPage 577 / totalPages 38)
+ * by recomputing from reading sessions that belong to the same book id.
+ */
+function repairProgressFromSessions(books: Book[], sessions: ReadingSession[]): void {
+	const latestPage = new Map<string, number>();
+	const maxTotal = new Map<string, number>();
+	for (const session of sessions) {
+		if (!session.bookId) continue;
+		if (session.page > (latestPage.get(session.bookId) ?? -1)) {
+			latestPage.set(session.bookId, session.page);
+		}
+		if (session.totalPages > (maxTotal.get(session.bookId) ?? 0)) {
+			maxTotal.set(session.bookId, session.totalPages);
+		}
+	}
+	for (const book of books) {
+		const sessionPages = maxTotal.get(book.id);
+		if (sessionPages && sessionPages > book.totalPages) {
+			book.totalPages = sessionPages;
+		}
+		const sessionCurrent = latestPage.get(book.id);
+		if (sessionCurrent !== undefined && sessionCurrent > book.currentPage) {
+			book.currentPage = sessionCurrent;
+		}
+		// If still inconsistent (page past end), trust the larger total from sessions.
+		if (book.totalPages > 0 && book.currentPage > book.totalPages && sessionPages) {
+			book.totalPages = Math.max(book.totalPages, sessionPages, book.currentPage);
+		} else if (book.totalPages > 0 && book.currentPage > book.totalPages) {
+			book.totalPages = book.currentPage;
+		}
+		if (book.totalPages > 0) {
+			book.progress = Math.min(100, Math.round((book.currentPage / book.totalPages) * 100));
+		}
+	}
+}
+
 function parseAuthors(value: unknown): string[] {
 	if (Array.isArray(value)) return value.map((author) => String(author).slice(0, 200)).slice(0, 20);
 	if (typeof value === 'string') {
@@ -172,29 +215,44 @@ export const POST: RequestHandler = async ({ request }) => {
 	// Simpan sesi dulu: tanggal mulai/terakhir dibaca diturunkan dari sesi saat library dibaca.
 	await saveIncomingSessions(sessions);
 
+	// Max totalPages seen in sessions per book — heals rows where title-merge bled
+	// a short book's page count onto a longer book's progress.
+	const maxSessionPagesByBook = new Map<string, number>();
+	for (const session of sessions) {
+		if (session.totalPages > 0) {
+			const prev = maxSessionPagesByBook.get(session.bookId) ?? 0;
+			if (session.totalPages > prev) maxSessionPagesByBook.set(session.bookId, session.totalPages);
+		}
+	}
+
 	let attachedHighlightsToAny = false;
 	const library = await updateLibrary((data) => {
 		for (const [bookId, metadata] of booksById) {
-			let existingIndex = data.books.findIndex((book) => book.id === bookId);
-			if (existingIndex < 0 && metadata.title) {
-				const normTitle = String(metadata.title).trim().toLowerCase();
-				existingIndex = data.books.findIndex(
-					(book) => book.title.trim().toLowerCase() === normTitle
-				);
-			}
+			// Identity is MD5/id only — never merge different files that share a metadata title
+			// (e.g. "Kumpulan Cerpen" vs "Kumpulan Cerpen Kompas 2006").
+			const existingIndex = data.books.findIndex((book) => book.id === bookId);
 			const existing = existingIndex >= 0 ? data.books[existingIndex] : undefined;
 			const isCurrentBook = bookId === id;
 			if (isCurrentBook && incomingHighlights.length > 0) {
 				attachedHighlightsToAny = true;
 			}
-			const bookTotalPages = Math.max(0, Number(metadata.totalPages ?? metadata.pages) || 0);
+			const metaTotal = finiteNumber(metadata.totalPages ?? metadata.pages);
+			const sessionTotal = maxSessionPagesByBook.get(bookId) ?? 0;
+			const bookTotalPages = Math.max(
+				0,
+				metaTotal !== undefined && metaTotal > 0 ? metaTotal : 0,
+				sessionTotal,
+				existing?.totalPages && existing.totalPages > 0 && (metaTotal === undefined || metaTotal <= 0)
+					? existing.totalPages
+					: 0
+			);
+			const latestFromSessions = latestPageByBook.get(bookId)?.page;
+			const metaCurrent = finiteNumber(metadata.currentPage ?? latestFromSessions);
 			const bookCurrentPage = isCurrentBook
 				? currentPage
 				: Math.max(
 						0,
-						Number(metadata.currentPage ?? latestPageByBook.get(bookId)?.page) ||
-							existing?.currentPage ||
-							0
+						metaCurrent !== undefined ? metaCurrent : (existing?.currentPage ?? 0)
 					);
 			const bookProgress =
 				bookTotalPages > 0
@@ -253,6 +311,8 @@ export const POST: RequestHandler = async ({ request }) => {
 					: (existing?.lastReadAt ?? now);
 			}
 
+			const incomingReadPages = finiteNumber(metadata.total_read_pages);
+			const incomingReadTime = finiteNumber(metadata.total_read_time);
 			const book: Book = {
 				id: bookId,
 				title: String(
@@ -263,16 +323,16 @@ export const POST: RequestHandler = async ({ request }) => {
 					: (existing?.authors ?? []),
 				series: metadata.series ? String(metadata.series).slice(0, 300) : existing?.series,
 				language: metadata.language ? String(metadata.language).slice(0, 40) : existing?.language,
-				totalPages: bookTotalPages || existing?.totalPages || 0,
+				totalPages: bookTotalPages > 0 ? bookTotalPages : (existing?.totalPages ?? 0),
 				currentPage: bookCurrentPage,
 				progress: bookProgress,
 				totalReadPages: Math.max(
 					0,
-					Number(metadata.total_read_pages) || existing?.totalReadPages || 0
+					incomingReadPages !== undefined ? incomingReadPages : (existing?.totalReadPages ?? 0)
 				),
 				totalReadTime: Math.max(
 					0,
-					Number(metadata.total_read_time) || existing?.totalReadTime || 0
+					incomingReadTime !== undefined ? incomingReadTime : (existing?.totalReadTime ?? 0)
 				),
 				status: bookStatus,
 				startedAt: bookStartedAt,
@@ -287,6 +347,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			if (existingIndex >= 0) data.books[existingIndex] = book;
 			else data.books.push(book);
 		}
+
+		// Heal any remaining inconsistent rows using session data already in the library.
+		repairProgressFromSessions(data.books, data.readingSessions);
 
 		data.books.sort((a, b) => new Date(b.lastReadAt).getTime() - new Date(a.lastReadAt).getTime());
 

@@ -6,9 +6,11 @@
 	import Icon from '../../lib/components/m3/Icon.svelte';
 	import Pagination from '../../lib/components/m3/Pagination.svelte';
 	import ThemeSwitch from '../../lib/components/m3/ThemeSwitch.svelte';
+	import LocaleSwitch from '../../lib/components/m3/LocaleSwitch.svelte';
 	import InsightsPanel from '../../lib/components/m3/InsightsPanel.svelte';
 	import { computeStats, formatHours, isKnownAuthor } from '../../lib/stats';
 	import { formatDateOnly, formatDateTime, formatDuration, getReadingDaysCount } from '../../lib/utils';
+	import { getLocale, t } from '../../lib/i18n/i18n.svelte';
 
 	type Highlight = { id?: string; text: string; note?: string; page?: number; createdAt?: string };
 	type Book = {
@@ -34,11 +36,17 @@
 
 	let books = $derived(data.books as Book[]);
 	let stats = $derived(computeStats(books, data.readingSessions ?? []));
+	let locale = $derived(getLocale());
+	let displayName = $derived((data.displayName ?? '').trim());
 
 	// ---------- util ----------
-	const statusLabel = { finished: 'Selesai', reading: 'Sedang dibaca', paused: 'Dijeda' } as const;
+	const statusLabel = $derived({
+		finished: t('statusFinished'),
+		reading: t('statusReading'),
+		paused: t('statusPaused')
+	} as const);
 	const time = (iso?: string) => (iso ? Date.parse(iso) || 0 : 0);
-	const authorsOf = (b: Book) => b.authors.filter(isKnownAuthor).join(', ') || 'Penulis tidak diketahui';
+	const authorsOf = (b: Book) => b.authors.filter(isKnownAuthor).join(', ') || t('unknownAuthor');
 	// Buku yang ditandai selesai selalu tampil 100%, walau halaman terakhir di KOReader belum di ujung.
 	const pct = (b: Book) => (b.status === 'finished' ? 100 : (b.progress ?? 0));
 
@@ -47,13 +55,13 @@
 	// ---------- rak buku ----------
 	type Filter = 'all' | 'reading' | 'finished' | 'paused';
 	type Sort = 'recent' | 'finished' | 'oldest' | 'progress' | 'time';
-	const sortOptions: { id: Sort; label: string }[] = [
-		{ id: 'recent', label: 'Terakhir dibaca' },
-		{ id: 'finished', label: 'Baru selesai' },
-		{ id: 'oldest', label: 'Terlama dibaca' },
-		{ id: 'progress', label: 'Progres tertinggi' },
-		{ id: 'time', label: 'Waktu baca terbanyak' }
-	];
+	const sortOptions = $derived<{ id: Sort; label: string }[]>([
+		{ id: 'recent', label: t('sortRecent') },
+		{ id: 'finished', label: t('sortFinished') },
+		{ id: 'oldest', label: t('sortOldest') },
+		{ id: 'progress', label: t('sortProgress') },
+		{ id: 'time', label: t('sortTime') }
+	]);
 
 	let filter = $state<Filter>('all');
 	let query = $state('');
@@ -91,10 +99,12 @@
 	);
 
 	const filters = $derived<{ id: Filter; label: string; count: number }[]>([
-		{ id: 'all', label: 'Semua', count: stats.counts.books },
-		{ id: 'reading', label: 'Sedang dibaca', count: stats.counts.reading },
-		{ id: 'finished', label: 'Selesai', count: stats.counts.finished },
-		...(stats.counts.paused ? [{ id: 'paused' as const, label: 'Dijeda', count: stats.counts.paused }] : [])
+		{ id: 'all', label: t('all'), count: stats.counts.books },
+		{ id: 'reading', label: t('statusReading'), count: stats.counts.reading },
+		{ id: 'finished', label: t('statusFinished'), count: stats.counts.finished },
+		...(stats.counts.paused
+			? [{ id: 'paused' as const, label: t('statusPaused'), count: stats.counts.paused }]
+			: [])
 	]);
 
 	// ---------- kutipan ----------
@@ -170,10 +180,10 @@
 </script>
 
 <svelte:head>
-	<title>Rak Bacaan Publik · Kolibri</title>
-	<meta name="description" content="Buku yang sedang dibaca, yang sudah tamat, statistik membaca, dan kutipan favorit." />
-	<meta property="og:title" content="Rak Bacaan Kolibri" />
-	<meta property="og:description" content="Buku, statistik progres baca, dan kutipan catatan bacaan." />
+	<title>{t('publicTitle')}</title>
+	<meta name="description" content={t('publicDescription')} />
+	<meta property="og:title" content={displayName ? t('shelfHeroNamed', { name: displayName }) : t('publicOgTitle')} />
+	<meta property="og:description" content={t('publicDescription')} />
 </svelte:head>
 
 <svelte:window onscroll={() => (scrolled = window.scrollY > 8)} />
@@ -185,7 +195,10 @@
 				<span class="md-brand-mark">K</span>
 				<span class="md-title-l">Kolibri</span>
 			</a>
-			<ThemeSwitch />
+			<div class="appbar-actions">
+				<LocaleSwitch />
+				<ThemeSwitch />
+			</div>
 		</div>
 	</header>
 
@@ -193,24 +206,34 @@
 		<main class="md-container private">
 			<div class="md-empty private-card">
 				<span class="private-icon"><Icon name="lock" size={28} /></span>
-				<h1 class="md-headline-s">Rak bacaan ini privat</h1>
-				<p class="md-body-l md-variant">Pemilik belum membuka rak bacaannya untuk umum. Jika ini milikmu, masuk untuk membuka ruang baca pribadi.</p>
-				<a class="md-btn md-btn--filled md-state" href={resolve('/')}>Masuk ke ruang baca</a>
+				<h1 class="md-headline-s">{t('privateShelfTitle')}</h1>
+				<p class="md-body-l md-variant">{t('privateShelfBody')}</p>
+				<a class="md-btn md-btn--filled md-state" href={resolve('/')}>{t('enterReadingRoom')}</a>
 			</div>
 		</main>
 	{:else}
 		<main class="md-container">
 			<!-- ===== Hero ===== -->
 			<section class="hero">
-				<h1 class="hero-title">Rak bacaan</h1>
+				<h1 class="hero-title">
+					{displayName ? t('shelfHeroNamed', { name: displayName }) : t('shelfHero')}
+				</h1>
 				<p class="md-body-l md-variant hero-text">
-					Buku yang sedang dibaca, yang sudah tamat, dan kutipan yang layak diingat. Diperbarui otomatis dari KOReader.
+					{displayName
+						? t('shelfHeroTextNamed', { name: displayName })
+						: t('shelfHeroText')}
 				</p>
 				<div class="hero-facts md-chips">
-					<span class="md-badge md-badge--finished"><Icon name="checkCircle" size={16} />{stats.counts.finished} buku tamat</span>
-					<span class="md-badge md-badge--reading"><Icon name="book" size={16} />{stats.counts.reading} sedang dibaca</span>
+					<span class="md-badge md-badge--finished"
+						><Icon name="checkCircle" size={16} />{t('booksFinished', { n: stats.counts.finished })}</span
+					>
+					<span class="md-badge md-badge--reading"
+						><Icon name="book" size={16} />{t('booksReading', { n: stats.counts.reading })}</span
+					>
 					{#if stats.currentStreak > 0}
-						<span class="md-badge md-badge--paused"><Icon name="flame" size={16} />{stats.currentStreak} hari beruntun</span>
+						<span class="md-badge md-badge--paused"
+							><Icon name="flame" size={16} />{t('streakDays', { n: stats.currentStreak })}</span
+						>
 					{/if}
 				</div>
 			</section>
@@ -219,8 +242,12 @@
 			<section class="md-section" aria-labelledby="stats-title">
 				<div class="md-section-head">
 					<div>
-						<h2 id="stats-title" class="md-title-l">Statistik membaca</h2>
-						<p class="md-body-m">Ringkasan koleksi dan kebiasaan membaca dari {stats.sessionCount.toLocaleString('id-ID')} sesi tercatat.</p>
+						<h2 id="stats-title" class="md-title-l">{t('readingStats')}</h2>
+						<p class="md-body-m">
+							{t('readingStatsHint', {
+								n: stats.sessionCount.toLocaleString(locale === 'en' ? 'en-US' : 'id-ID')
+							})}
+						</p>
 					</div>
 				</div>
 				<InsightsPanel {stats} />
@@ -230,8 +257,10 @@
 			<section class="md-section anchor" bind:this={shelfEl} aria-labelledby="shelf-title">
 				<div class="md-section-head">
 					<div>
-						<h2 id="shelf-title" class="md-title-l">Rak buku</h2>
-						<p class="md-body-m md-num">{filteredBooks.length} dari {books.length} buku</p>
+						<h2 id="shelf-title" class="md-title-l">{t('bookShelf')}</h2>
+						<p class="md-body-m md-num">
+							{t('booksOf', { shown: filteredBooks.length, total: books.length })}
+						</p>
 					</div>
 				</div>
 
@@ -240,14 +269,14 @@
 						<Icon name="search" />
 						<input
 							type="search"
-							placeholder="Cari judul atau penulis"
-							aria-label="Cari buku"
+							placeholder={t('searchTitleOrAuthor')}
+							aria-label={t('searchBooks')}
 							bind:value={query}
 							oninput={() => (bookPage = 1)}
 						/>
 					</label>
 					<div class="toolbar-row">
-						<div class="md-chips" role="group" aria-label="Filter status">
+						<div class="md-chips" role="group" aria-label={t('filterStatus')}>
 							{#each filters as f (f.id)}
 								<button
 									type="button"
@@ -264,7 +293,7 @@
 							{/each}
 						</div>
 						<label class="md-select">
-							<span>Urutkan</span>
+							<span>{t('sortBy')}</span>
 							<select bind:value={sort} onchange={() => (bookPage = 1)}>
 								{#each sortOptions as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
 							</select>
@@ -277,10 +306,15 @@
 					<ul class="book-grid">
 						{#each pagedBooks as b (b.id)}
 							<li>
-								<button type="button" class="book md-state" onclick={() => openBook(b.id)} aria-label="Lihat detail {b.title}">
+								<button
+									type="button"
+									class="book md-state"
+									onclick={() => openBook(b.id)}
+									aria-label={t('viewBookDetail', { title: b.title })}
+								>
 									<span class="cover">
 										{#if b.coverUrl}
-											<img src={b.coverUrl} alt="Sampul {b.title}" loading="lazy" />
+											<img src={b.coverUrl} alt={t('coverOf', { title: b.title })} loading="lazy" />
 										{:else}
 											<span class="cover-ph">
 												<span class="md-title-s clamp-4">{b.title}</span>
@@ -302,8 +336,12 @@
 										<span class="md-progress"><span style="width: {pct(b)}%"></span></span>
 										<span class="md-body-s md-variant md-num line">
 											<span>{pct(b)}%</span>
-											<span>hlm {b.currentPage}{b.totalPages ? `/${b.totalPages}` : ''}</span>
-											{#if b.totalReadTime}<span>{formatDuration(b.totalReadTime)}</span>{/if}
+											<span
+												>{t('pageShort')} {b.currentPage}{b.totalPages
+													? `/${b.totalPages}`
+													: ''}</span
+											>
+											{#if b.totalReadTime}<span>{formatDuration(b.totalReadTime, locale)}</span>{/if}
 										</span>
 									</span>
 								</button>
@@ -315,14 +353,14 @@
 						bind:perPage={bookPerPage}
 						total={filteredBooks.length}
 						options={[12, 24, 48]}
-						label="buku"
+						label={t('booksUnit')}
 						onchange={() => toTop(shelfEl)}
 					/>
 				{:else}
 					<div class="md-empty">
 						<Icon name="search" size={28} />
-						<p class="md-title-s">Tidak ada buku yang cocok</p>
-						<p class="md-body-m">Coba ubah kata kunci atau filter status.</p>
+						<p class="md-title-s">{t('noMatchingBooks')}</p>
+						<p class="md-body-m">{t('tryOtherFilter')}</p>
 					</div>
 				{/if}
 			</section>
@@ -332,8 +370,10 @@
 				<section class="md-section anchor" bind:this={quotesEl} aria-labelledby="quotes-title">
 					<div class="md-section-head">
 						<div>
-							<h2 id="quotes-title" class="md-title-l">Kutipan &amp; catatan</h2>
-							<p class="md-body-m md-num">{filteredQuotes.length} dari {allQuotes.length} kutipan yang dibagikan</p>
+							<h2 id="quotes-title" class="md-title-l">{t('quotesNotes')}</h2>
+							<p class="md-body-m md-num">
+								{t('quotesSharedOf', { shown: filteredQuotes.length, total: allQuotes.length })}
+							</p>
 						</div>
 					</div>
 
@@ -342,8 +382,8 @@
 							<Icon name="search" />
 							<input
 								type="search"
-								placeholder="Cari isi kutipan, catatan, atau judul"
-								aria-label="Cari kutipan"
+								placeholder={t('searchQuotesPlaceholder')}
+								aria-label={t('searchQuotes')}
 								bind:value={qQuery}
 								oninput={() => (qPage = 1)}
 							/>
@@ -360,24 +400,24 @@
 									}}
 								>
 									{#if qNotesOnly}<Icon name="check" size={16} />{/if}
-									Ada catatan
+									{t('hasNotes')}
 								</button>
 							</div>
 							<div class="selects">
 								<label class="md-select">
-									<span>Buku</span>
+									<span>{t('bookLabel')}</span>
 									<select bind:value={qBook} onchange={() => (qPage = 1)}>
-										<option value="all">Semua</option>
+										<option value="all">{t('all')}</option>
 										{#each quoteBooks as b (b.id)}<option value={b.id}>{b.title}</option>{/each}
 									</select>
 									<Icon name="down" size={18} />
 								</label>
 								<label class="md-select">
-									<span>Urutkan</span>
+									<span>{t('sortBy')}</span>
 									<select bind:value={qSort} onchange={() => (qPage = 1)}>
-										<option value="newest">Terbaru</option>
-										<option value="oldest">Terlama</option>
-										<option value="book">Judul buku</option>
+										<option value="newest">{t('newest')}</option>
+										<option value="oldest">{t('oldest')}</option>
+										<option value="book">{t('byBookTitle')}</option>
 									</select>
 									<Icon name="down" size={18} />
 								</label>
@@ -397,7 +437,9 @@
 									<footer>
 										<button type="button" class="link md-label-l md-state" onclick={() => openBook(q.bookId)}>{q.bookTitle}</button>
 										<span class="md-body-s md-variant md-num">
-											{q.page ? `Hlm ${q.page}` : ''}{q.page && q.createdAt ? ' · ' : ''}{q.createdAt ? formatDateOnly(q.createdAt) : ''}
+											{q.page ? `${t('pageShort')} ${q.page}` : ''}{q.page && q.createdAt
+												? ' · '
+												: ''}{q.createdAt ? formatDateOnly(q.createdAt, locale) : ''}
 										</span>
 									</footer>
 								</li>
@@ -408,21 +450,21 @@
 							bind:perPage={qPerPage}
 							total={filteredQuotes.length}
 							options={[6, 12, 24]}
-							label="kutipan"
+							label={t('quotesUnit')}
 							onchange={() => toTop(quotesEl)}
 						/>
 					{:else}
 						<div class="md-empty">
 							<Icon name="quote" size={28} />
-							<p class="md-title-s">Tidak ada kutipan yang cocok</p>
-							<p class="md-body-m">Coba ubah pencarian atau filter.</p>
+							<p class="md-title-s">{t('noMatchingQuotes')}</p>
+							<p class="md-body-m">{t('tryOtherSearch')}</p>
 						</div>
 					{/if}
 				</section>
 			{/if}
 
 			<footer class="foot md-body-s md-variant">
-				<span>Dibagikan dari pustaka pribadi · Kolibri</span>
+				<span>{t('sharedFromLibrary')}</span>
 			</footer>
 		</main>
 	{/if}
@@ -441,7 +483,10 @@
 		{#if selected && selectedInfo}
 			<header class="dlg-head">
 				<span class="dlg-cover">
-					{#if selected.coverUrl}<img src={selected.coverUrl} alt="Sampul {selected.title}" />{:else}<span class="ph">{selected.title.slice(0, 1)}</span>{/if}
+					{#if selected.coverUrl}<img
+							src={selected.coverUrl}
+							alt={t('coverOf', { title: selected.title })}
+						/>{:else}<span class="ph">{selected.title.slice(0, 1)}</span>{/if}
 				</span>
 				<div class="dlg-title">
 					<span class="md-badge md-badge--{selected.status}">{statusLabel[selected.status]}</span>
@@ -450,39 +495,51 @@
 						{authorsOf(selected)}{selected.series ? ` · ${selected.series}` : ''}
 					</p>
 				</div>
-				<button type="button" class="md-icon-btn md-state close" onclick={closeBook} aria-label="Tutup"><Icon name="close" /></button>
+				<button type="button" class="md-icon-btn md-state close" onclick={closeBook} aria-label={t('close')}
+					><Icon name="close" /></button
+				>
 			</header>
 
 			<div class="dlg-body">
 				<div class="dlg-progress md-card">
 					<div class="line-between">
-						<span class="md-title-s">Halaman {selected.currentPage}{selected.totalPages ? ` dari ${selected.totalPages}` : ''}</span>
+						<span class="md-title-s"
+							>{t('page')} {selected.currentPage}{selected.totalPages
+								? ` / ${selected.totalPages}`
+								: ''}</span
+						>
 						<span class="md-title-s md-num">{pct(selected)}%</span>
 					</div>
 					<div class="md-progress"><span style="width: {pct(selected)}%"></span></div>
 					<span class="md-body-s md-variant">
-						{selected.totalReadPages ?? selected.currentPage} halaman tercatat dibaca
-						{#if selectedInfo.eta > 0} · perkiraan {formatHours(selectedInfo.eta)} lagi untuk tamat{/if}
+						{t('pagesRecorded', { n: selected.totalReadPages ?? selected.currentPage })}
+						{#if selectedInfo.eta > 0} · ~{formatHours(selectedInfo.eta, locale)}{/if}
 					</span>
 				</div>
 
 				<dl class="facts">
-					<div><dt>Mulai dibaca</dt><dd>{formatDateOnly(selected.startedAt)}</dd></div>
+					<div><dt>{t('startedLabel')}</dt><dd>{formatDateOnly(selected.startedAt, locale)}</dd></div>
 					{#if selected.status === 'finished'}
-						<div><dt>Tamat</dt><dd>{formatDateOnly(selected.finishedAt ?? selected.lastReadAt)}</dd></div>
+						<div><dt>{t('statusFinished')}</dt><dd>{formatDateOnly(selected.finishedAt ?? selected.lastReadAt, locale)}</dd></div>
 					{:else}
-						<div><dt>Terakhir dibaca</dt><dd>{formatDateTime(selected.lastReadAt)}</dd></div>
+						<div><dt>{t('lastReadLabel')}</dt><dd>{formatDateTime(selected.lastReadAt, locale)}</dd></div>
 					{/if}
-					<div><dt>Total waktu baca</dt><dd>{formatDuration(selected.totalReadTime)}</dd></div>
-					<div><dt>Rentang membaca</dt><dd>{selectedInfo.days} hari</dd></div>
-					{#if selectedInfo.sessions}<div><dt>Sesi membaca</dt><dd>{selectedInfo.sessions}</dd></div>{/if}
-					{#if selectedInfo.pph}<div><dt>Kecepatan</dt><dd>{selectedInfo.pph} halaman/jam</dd></div>{/if}
-					{#if selected.language}<div><dt>Bahasa</dt><dd>{selected.language.toUpperCase()}</dd></div>{/if}
+					<div><dt>{t('durationLabel')}</dt><dd>{formatDuration(selected.totalReadTime, locale)}</dd></div>
+					<div><dt>{t('daysLabel')}</dt><dd>{selectedInfo.days} {t('days')}</dd></div>
+					{#if selectedInfo.sessions}<div
+							><dt>{t('readingSessions')}</dt><dd>{selectedInfo.sessions}</dd></div
+						>{/if}
+					{#if selectedInfo.pph}<div
+							><dt>{t('speed')}</dt><dd>{t('pagesPerHour', { n: selectedInfo.pph })}</dd></div
+						>{/if}
+					{#if selected.language}<div
+							><dt>{t('language')}</dt><dd>{selected.language.toUpperCase()}</dd></div
+						>{/if}
 				</dl>
 
-				<h3 class="md-title-m">Kutipan &amp; catatan ({selected.highlights.length})</h3>
+				<h3 class="md-title-m">{t('quotesNotes')} ({selected.highlights.length})</h3>
 				{#if selected.highlights.length === 0}
-					<div class="md-empty"><p class="md-body-m">Belum ada kutipan yang dibagikan dari buku ini.</p></div>
+					<div class="md-empty"><p class="md-body-m">{t('noSharedQuotes')}</p></div>
 				{:else}
 					<ul class="dlg-quotes">
 						{#each modalQuotes as h, i (h.id ?? `${i}-${h.text}`)}
@@ -490,12 +547,20 @@
 								<blockquote class="md-body-m">{h.text}</blockquote>
 								{#if h.note}<p class="note md-body-m"><Icon name="note" size={16} /><span>{h.note}</span></p>{/if}
 								<span class="md-body-s md-variant md-num">
-									{h.page ? `Hlm ${h.page}` : ''}{h.page && h.createdAt ? ' · ' : ''}{h.createdAt ? formatDateTime(h.createdAt) : ''}
+									{h.page ? `${t('pageShort')} ${h.page}` : ''}{h.page && h.createdAt
+										? ' · '
+										: ''}{h.createdAt ? formatDateTime(h.createdAt, locale) : ''}
 								</span>
 							</li>
 						{/each}
 					</ul>
-					<Pagination bind:page={modalPage} bind:perPage={modalPerPage} total={selected.highlights.length} options={[4, 8, 12]} label="kutipan" />
+					<Pagination
+						bind:page={modalPage}
+						bind:perPage={modalPerPage}
+						total={selected.highlights.length}
+						options={[4, 8, 12]}
+						label={t('quotesUnit')}
+					/>
 				{/if}
 			</div>
 		{/if}
@@ -503,6 +568,13 @@
 </div>
 
 <style>
+	.appbar-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
 	.anchor {
 		scroll-margin-top: 72px;
 	}

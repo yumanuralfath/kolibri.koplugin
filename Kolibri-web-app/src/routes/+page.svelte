@@ -3,7 +3,9 @@
 	import { onMount } from 'svelte';
 	import ReadingAnalytics from '../lib/components/ReadingAnalytics.svelte';
 	import ThemeToggle from '../lib/components/ThemeToggle.svelte';
+	import LocaleSwitch from '../lib/components/m3/LocaleSwitch.svelte';
 	import { formatDateTime, formatDateOnly, formatDuration, getReadingDaysCount } from '../lib/utils';
+	import { getLocale, t } from '../lib/i18n/i18n.svelte';
 
 	type Highlight = {
 		id: string;
@@ -45,10 +47,13 @@
 		readingSessions: ReadingSession[];
 		published: boolean;
 		publishId?: string;
+		displayName?: string;
 	};
 	type Cover = { title: string; author: string; url: string };
 
 	let library = $state<Library>({ books: [], readingSessions: [], published: false });
+	let locale = $derived(getLocale());
+	let displayNameDraft = $state('');
 	let authenticated = $state(false);
 	let setupRequired = $state(false);
 	let loading = $state(true);
@@ -229,6 +234,7 @@
 		}
 		if (!response.ok) throw new Error('Tidak bisa memuat pustaka.');
 		library = await response.json();
+		displayNameDraft = library.displayName ?? '';
 		authenticated = true;
 	}
 
@@ -273,10 +279,11 @@
 		visible?: boolean;
 		coverUrl?: string | null;
 		published?: boolean;
+		displayName?: string | null;
 		status?: 'reading' | 'finished' | 'paused';
 		finishedAt?: string;
 	}) {
-		pending = patch.bookId ?? 'publish';
+		pending = patch.bookId ?? (patch.displayName !== undefined ? 'display-name' : 'publish');
 		try {
 			const response = await fetch('/api/manage', {
 				method: 'PATCH',
@@ -285,6 +292,10 @@
 			});
 			if (!response.ok) throw new Error('Perubahan tidak tersimpan.');
 			library = await response.json();
+			if (patch.displayName !== undefined) {
+				displayNameDraft = library.displayName ?? '';
+				successMessage = t('settingsSaved');
+			}
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan.';
 		} finally {
@@ -601,6 +612,7 @@
 				><span class="brand-mark">K</span><span>kolibri</span></a
 			>
 			<div class="topbar-right">
+				<LocaleSwitch />
 				<ThemeToggle />
 				<span class="connection"><i></i> KOReader connected</span>
 				<details class="sync-settings">
@@ -677,6 +689,28 @@
 						<span></span>
 					</button>
 				</div>
+			</section>
+			<section class="personalize-row">
+				<label class="display-name-field">
+					<span>{t('displayNameLabel')}</span>
+					<small>{t('displayNameHint', { name: displayNameDraft.trim() || 'Alex' })}</small>
+					<div class="display-name-input">
+						<input
+							type="text"
+							maxlength="80"
+							placeholder={t('displayNamePlaceholder')}
+							bind:value={displayNameDraft}
+						/>
+						<button
+							type="button"
+							class="small-button"
+							disabled={pending === 'display-name' || displayNameDraft.trim() === (library.displayName ?? '')}
+							onclick={() => save({ displayName: displayNameDraft.trim() || null })}
+						>
+							{t('saveSettings')}
+						</button>
+					</div>
+				</label>
 			</section>
 			{#if library.published && publicUrl}
 				<div class="publish-link">
@@ -1142,22 +1176,30 @@
 									<div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
 										<span class="status-dot status-dot--{selectedBook.status}"></span>
 										<small style="font-family: var(--mono); font-size: 10px; text-transform: uppercase;">
-											{selectedBook.status === 'finished' ? 'Selesai Dibaca' : selectedBook.status === 'paused' ? 'Dijeda' : 'Sedang Dibaca'}
+											{selectedBook.status === 'finished'
+												? t('statusFinishedReading')
+												: selectedBook.status === 'paused'
+													? t('statusPaused')
+													: t('statusReading')}
 										</small>
 									</div>
 									<h2>{selectedBook.title}</h2>
-									<p>{selectedBook.authors.join(', ') || 'Penulis tidak diketahui'}</p>
+									<p>{selectedBook.authors.join(', ') || t('unknownAuthor')}</p>
 									<button
 										type="button"
 										class="highlight-visibility-badge {selectedBook.visible ? 'is-public' : 'is-private'}"
 										onclick={() => save({ bookId: selectedBook.id, visible: !selectedBook.visible })}
 									>
-										{selectedBook.visible ? '◉ Ditampilkan di Rak Publik' : '○ Disembunyikan dari Publik'}
+										{selectedBook.visible ? t('shownOnPublicShelf') : t('hiddenFromPublic')}
 									</button>
-									<div class="status-control" role="group" aria-label="Status baca">
-										<span class="status-control-label">Status baca</span>
+									<div class="status-control" role="group" aria-label={t('statusReadingLabel')}>
+										<span class="status-control-label">{t('statusReadingLabel')}</span>
 										<div class="status-switch">
-											{#each [['reading', 'Sedang dibaca'], ['paused', 'Dijeda'], ['finished', '✓ Selesai']] as [value, label] (value)}
+											{#each [
+												['reading', t('statusReading')],
+												['paused', t('statusPaused')],
+												['finished', `✓ ${t('statusFinished')}`]
+											] as [value, label] (value)}
 												<button
 													type="button"
 													class="status-switch-btn"
@@ -1172,7 +1214,7 @@
 										</div>
 										{#if selectedBook.status === 'finished'}
 											<label class="status-date">
-												<span>Tanggal tamat</span>
+												<span>{t('finishDate')}</span>
 												<input
 													type="date"
 													value={toDateInput(selectedBook.finishedAt ?? selectedBook.lastReadAt)}
@@ -1183,11 +1225,11 @@
 										{/if}
 									</div>
 									<div class="modal-cover-editor">
-										<span class="status-control-label">Sampul buku</span>
+										<span class="status-control-label">{t('bookCover')}</span>
 										<div class="manual-cover">
 											<input
-												aria-label={`URL gambar sampul ${selectedBook.title}`}
-												placeholder="https:// URL gambar"
+												aria-label={`${t('imageUrl')} ${selectedBook.title}`}
+												placeholder={`https:// ${t('imageUrl')}`}
 												bind:value={coverDrafts[selectedBook.id]}
 											/><button
 												type="button"
@@ -1200,12 +1242,12 @@
 														return;
 													}
 													save({ bookId: selectedBook.id, coverUrl: url });
-												}}>Simpan URL</button
+												}}>{t('saveUrl')}</button
 											>
 										</div>
 										<div class="cover-tools-row">
 											<label class="small-button upload-btn" class:disabled={pending === `upload-${selectedBook.id}`}>
-												{pending === `upload-${selectedBook.id}` ? 'Mengunggah…' : '⬆ Upload gambar'}
+												{pending === `upload-${selectedBook.id}` ? t('uploading') : t('uploadImage')}
 												<input
 													type="file"
 													accept="image/jpeg,image/png,image/webp,image/gif"
@@ -1222,7 +1264,7 @@
 												class="small-button"
 												disabled={pending === `cover-${selectedBook.id}`}
 												onclick={() => findCovers(selectedBook)}
-												>{pending === `cover-${selectedBook.id}` ? 'Mencari…' : 'Cari otomatis'}</button
+												>{pending === `cover-${selectedBook.id}` ? t('searching') : t('autoSearch')}</button
 											>
 											{#if selectedBook.coverUrl}<button
 													type="button"
@@ -1230,7 +1272,7 @@
 													onclick={() => {
 														coverDrafts[selectedBook.id] = '';
 														save({ bookId: selectedBook.id, coverUrl: null });
-													}}>Hapus sampul</button
+													}}>{t('removeCover')}</button
 												>{/if}
 										</div>
 										{#if coverResults[selectedBook.id]?.length}<div class="cover-options">
@@ -1252,7 +1294,7 @@
 										disabled={pending === `del-book-${selectedBook.id}`}
 										onclick={() => deleteBook(selectedBook)}
 									>
-										🗑 Hapus buku
+										{t('deleteBook')}
 									</button>
 								</div>
 							</div>
@@ -1260,7 +1302,7 @@
 								type="button"
 								class="modal-close-btn"
 								onclick={() => (selectedBookId = null)}
-								aria-label="Tutup detail buku"
+								aria-label={t('closeBookDetail')}
 							>
 								×
 							</button>
@@ -1269,10 +1311,11 @@
 						<div class="modal-body">
 							<!-- Detailed reading info grid -->
 							<div class="detail-stats-grid">
-								<!-- 1. Baca sampai mana -->
 								<div class="detail-stat-card detail-stat-card--highlight">
-									<span class="stat-caption">📖 BACA SAMPAI MANA</span>
-									<strong>Halaman {selectedBook.currentPage} / {selectedBook.totalPages || '?'}</strong>
+									<span class="stat-caption">{t('progressCaption')}</span>
+									<strong
+										>{t('page')} {selectedBook.currentPage} / {selectedBook.totalPages || '?'}</strong
+									>
 									<div class="progress-line" style="margin: 4px 0;">
 										<div class="progress-track" style="height: 6px;">
 											<span style="width: {selectedBook.progress}%"></span>
@@ -1280,50 +1323,63 @@
 										<span style="font-size: 11px;">{selectedBook.progress}%</span>
 									</div>
 									<small>
-										{selectedBook.totalReadPages ?? selectedBook.currentPage} halaman tercatat telah dibaca
+										{t('pagesRecorded', {
+											n: selectedBook.totalReadPages ?? selectedBook.currentPage
+										})}
 									</small>
 								</div>
 
-								<!-- 2. Mulai tanggal kapan jam berapa -->
 								<div class="detail-stat-card">
-									<span class="stat-caption">🗓 MULAI DIBACA</span>
-									<strong>{formatDateTime(selectedBook.startedAt)}</strong>
-									<small>Tanggal & jam pertama kali buku dibuka</small>
+									<span class="stat-caption">{t('startedCaption')}</span>
+									<strong>{formatDateTime(selectedBook.startedAt, locale)}</strong>
+									<small>{t('startedHint')}</small>
 								</div>
 
-								<!-- 3. Sudah berapa lama baca buku -->
 								<div class="detail-stat-card">
-									<span class="stat-caption">⏱ TOTAL DURASI BACA</span>
-									<strong>{formatDuration(selectedBook.totalReadTime)}</strong>
-									<small>Total waktu yang dihabiskan untuk membaca</small>
+									<span class="stat-caption">{t('durationCaption')}</span>
+									<strong>{formatDuration(selectedBook.totalReadTime, locale)}</strong>
+									<small>{t('durationHint')}</small>
 								</div>
 
-								<!-- 4. Sudah berapa hari -->
 								<div class="detail-stat-card">
-									<span class="stat-caption">📆 HARI MEMBACA</span>
+									<span class="stat-caption">{t('daysCaption')}</span>
 									<strong>
-										{getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt || selectedBook.lastReadAt)} hari
+										{getReadingDaysCount(
+											selectedBook.startedAt,
+											selectedBook.finishedAt || selectedBook.lastReadAt
+										)}
+										{t('days')}
 									</strong>
 									<small>
-										{selectedBook.status === 'finished' ? 'Sejak mulai hingga selesai dibaca' : 'Sejak mulai hingga terakhir dibaca/dibuka'}
+										{selectedBook.status === 'finished'
+											? t('daysFinishedHint')
+											: t('daysReadingHint')}
 									</small>
 								</div>
 
-								<!-- 5. Kalau finished kapan finish dan butuh berapa lama -->
 								{#if selectedBook.status === 'finished' || selectedBook.finishedAt}
 									<div class="detail-stat-card" style="background: rgba(220, 106, 69, 0.08); border-color: var(--orange);">
-										<span class="stat-caption" style="color: var(--orange);">✨ STATUS SELESAI</span>
-										<strong>Tamat pada {formatDateTime(selectedBook.finishedAt || selectedBook.lastReadAt)}</strong>
+										<span class="stat-caption" style="color: var(--orange);">{t('finishedCaption')}</span>
+										<strong
+											>{t('finishedOn', {
+												date: formatDateTime(
+													selectedBook.finishedAt || selectedBook.lastReadAt,
+													locale
+												)
+											})}</strong
+										>
 										<small>
-											Butuh waktu {getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt)} hari
-											({formatDuration(selectedBook.totalReadTime)} waktu membaca aktif)
+											{t('finishedTook', {
+												days: getReadingDaysCount(selectedBook.startedAt, selectedBook.finishedAt),
+												duration: formatDuration(selectedBook.totalReadTime, locale)
+											})}
 										</small>
 									</div>
 								{:else}
 									<div class="detail-stat-card">
-										<span class="stat-caption">🕒 TERAKHIR DIBACA</span>
-										<strong>{formatDateTime(selectedBook.lastReadAt)}</strong>
-										<small>Sesi membaca terakhir di KOReader</small>
+										<span class="stat-caption">{t('lastReadCaption')}</span>
+										<strong>{formatDateTime(selectedBook.lastReadAt, locale)}</strong>
+										<small>{t('lastReadHint')}</small>
 									</div>
 								{/if}
 							</div>
@@ -1332,9 +1388,9 @@
 							<div class="modal-highlights-section">
 								<div class="modal-highlights-header">
 									<div>
-										<h3>Catatan & Highlight ({selectedBook.highlights.length})</h3>
+										<h3>{t('notesAndHighlights', { n: selectedBook.highlights.length })}</h3>
 										<small style="color: var(--muted); font-size: 11px;">
-											Atur catatan mana yang ingin ditampilkan atau disembunyikan di rak publik
+											{t('notesVisibilityHint')}
 										</small>
 									</div>
 									{#if selectedBook.highlights.length > 0}

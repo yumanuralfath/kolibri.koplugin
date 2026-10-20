@@ -19,5 +19,8 @@ export const GET: RequestHandler = async ({ params }) => {
 			status: book.status,
 			coverUrl: book.coverUrl
 		}));
-	return json({ books });
+	return json({
+		displayName: library.displayName ?? '',
+		books
+	});
 };

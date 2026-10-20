@@ -65,10 +65,15 @@ function daysBetween(a?: string, b?: string): number | null {
 	return Math.max(1, dayNumber(e) - dayNumber(s) + 1);
 }
 
-export function formatHours(seconds: number): string {
-	if (!seconds || seconds <= 0) return '0 mnt';
+export function formatHours(seconds: number, locale: 'id' | 'en' = 'id'): string {
+	if (!seconds || seconds <= 0) return locale === 'en' ? '0 min' : '0 mnt';
 	const h = Math.floor(seconds / 3600);
 	const m = Math.round((seconds % 3600) / 60);
+	if (locale === 'en') {
+		if (h > 0 && m > 0) return `${h}h ${m}m`;
+		if (h > 0) return `${h}h`;
+		return `${m}m`;
+	}
 	if (h > 0 && m > 0) return `${h} j ${m} mnt`;
 	if (h > 0) return `${h} j`;
 	return `${m} mnt`;
