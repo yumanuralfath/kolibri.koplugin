@@ -3,7 +3,9 @@ import { hasSyncPassword } from '../../../lib/server/auth';
 import {
 	createHighlightId,
 	getDeletedBooks,
+	isNearBookEnd,
 	isPageBookmark,
+	repairProgressFromSessions,
 	saveIncomingSessions,
 	updateLibrary,
 	type Book,
@@ -37,43 +39,6 @@ function cleanId(value: unknown): string {
 function finiteNumber(value: unknown): number | undefined {
 	const n = Number(value);
 	return Number.isFinite(n) ? n : undefined;
-}
-
-/**
- * Fix books where progress bled across titles (e.g. currentPage 577 / totalPages 38)
- * by recomputing from reading sessions that belong to the same book id.
- */
-function repairProgressFromSessions(books: Book[], sessions: ReadingSession[]): void {
-	const latestPage = new Map<string, number>();
-	const maxTotal = new Map<string, number>();
-	for (const session of sessions) {
-		if (!session.bookId) continue;
-		if (session.page > (latestPage.get(session.bookId) ?? -1)) {
-			latestPage.set(session.bookId, session.page);
-		}
-		if (session.totalPages > (maxTotal.get(session.bookId) ?? 0)) {
-			maxTotal.set(session.bookId, session.totalPages);
-		}
-	}
-	for (const book of books) {
-		const sessionPages = maxTotal.get(book.id);
-		if (sessionPages && sessionPages > book.totalPages) {
-			book.totalPages = sessionPages;
-		}
-		const sessionCurrent = latestPage.get(book.id);
-		if (sessionCurrent !== undefined && sessionCurrent > book.currentPage) {
-			book.currentPage = sessionCurrent;
-		}
-		// If still inconsistent (page past end), trust the larger total from sessions.
-		if (book.totalPages > 0 && book.currentPage > book.totalPages && sessionPages) {
-			book.totalPages = Math.max(book.totalPages, sessionPages, book.currentPage);
-		} else if (book.totalPages > 0 && book.currentPage > book.totalPages) {
-			book.totalPages = book.currentPage;
-		}
-		if (book.totalPages > 0) {
-			book.progress = Math.min(100, Math.round((book.currentPage / book.totalPages) * 100));
-		}
-	}
 }
 
 function parseAuthors(value: unknown): string[] {
@@ -238,22 +203,43 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 			const metaTotal = finiteNumber(metadata.totalPages ?? metadata.pages);
 			const sessionTotal = maxSessionPagesByBook.get(bookId) ?? 0;
+			const latestFromSessions = latestPageByBook.get(bookId)?.page;
+			const metaCurrent = finiteNumber(metadata.currentPage);
+			// Page "di mana terakhir baca" = sesi terakhir. Metadata KOReader sering
+			// mengirim currentPage = totalPages meski belum selesai (lalu progress 100% terkunci).
+			const bookCurrentPage = Math.max(
+				0,
+				latestFromSessions !== undefined
+					? latestFromSessions
+					: isCurrentBook
+						? currentPage
+						: (metaCurrent ?? existing?.currentPage ?? 0)
+			);
+			// Jika ada sesi di tengah buku tapi metadata bilang current=total (finished palsu),
+			// jangan biarkan totalPages metadata yang lebih besar mengunci progress ke 100%.
+			const metaCurrentVal = metaCurrent ?? (isCurrentBook ? currentPage : 0);
+			const metaLooksFinished =
+				metaTotal !== undefined &&
+				metaTotal > 0 &&
+				metaCurrentVal >= metaTotal &&
+				latestFromSessions !== undefined &&
+				sessionTotal > 0 &&
+				!isNearBookEnd(latestFromSessions, sessionTotal);
 			const bookTotalPages = Math.max(
 				0,
-				metaTotal !== undefined && metaTotal > 0 ? metaTotal : 0,
-				sessionTotal,
-				existing?.totalPages && existing.totalPages > 0 && (metaTotal === undefined || metaTotal <= 0)
+				metaLooksFinished
+					? sessionTotal
+					: metaTotal !== undefined && metaTotal > 0
+						? metaTotal
+						: 0,
+				metaLooksFinished ? 0 : sessionTotal,
+				existing?.totalPages &&
+					existing.totalPages > 0 &&
+					(metaTotal === undefined || metaTotal <= 0) &&
+					!metaLooksFinished
 					? existing.totalPages
 					: 0
 			);
-			const latestFromSessions = latestPageByBook.get(bookId)?.page;
-			const metaCurrent = finiteNumber(metadata.currentPage ?? latestFromSessions);
-			const bookCurrentPage = isCurrentBook
-				? currentPage
-				: Math.max(
-						0,
-						metaCurrent !== undefined ? metaCurrent : (existing?.currentPage ?? 0)
-					);
 			const bookProgress =
 				bookTotalPages > 0
 					? Math.min(100, Math.round((bookCurrentPage / bookTotalPages) * 100))
@@ -262,15 +248,24 @@ export const POST: RequestHandler = async ({ request }) => {
 				metadata.status === 'complete' || metadata.status === 'finished'
 					? 'finished'
 					: undefined;
-			const bookStatus: Book['status'] =
-				incomingStatus ??
-				(bookProgress >= 100
-					? 'finished'
-					: existing?.status === 'finished'
+			const atEnd = isNearBookEnd(bookCurrentPage, bookTotalPages);
+			const statusLocked = Boolean(existing?.statusLocked);
+			const bookStatus: Book['status'] = statusLocked
+				? (existing?.status ?? 'reading')
+				: (incomingStatus ??
+					(atEnd
 						? 'finished'
-						: existing?.status === 'paused'
-							? 'paused'
-							: 'reading');
+						: existing?.status === 'finished' && latestFromSessions === undefined
+							? 'finished'
+							: existing?.status === 'paused'
+								? 'paused'
+								: 'reading'));
+			const lockedCurrentPage =
+				bookStatus === 'finished' && bookTotalPages > 0 ? bookTotalPages : bookCurrentPage;
+			const lockedProgress =
+				bookTotalPages > 0
+					? Math.min(100, Math.round((lockedCurrentPage / bookTotalPages) * 100))
+					: bookProgress;
 			const bookHighlights = cleanHighlights(metadata.highlights, bookId);
 			const highlightMap = new Map<string, Highlight>();
 			for (const hl of existing?.highlights ?? []) {
@@ -309,6 +304,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				finishedAt = metadata.last_open
 					? new Date(Number(metadata.last_open) * 1000).toISOString()
 					: (existing?.lastReadAt ?? now);
+			} else if (bookStatus !== 'finished') {
+				finishedAt = undefined;
 			}
 
 			const incomingReadPages = finiteNumber(metadata.total_read_pages);
@@ -331,8 +328,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				series: metadata.series ? String(metadata.series).slice(0, 300) : existing?.series,
 				language: metadata.language ? String(metadata.language).slice(0, 40) : existing?.language,
 				totalPages: bookTotalPages > 0 ? bookTotalPages : (existing?.totalPages ?? 0),
-				currentPage: bookCurrentPage,
-				progress: bookProgress,
+				currentPage: lockedCurrentPage,
+				progress: lockedProgress,
 				totalReadPages: Math.max(
 					0,
 					incomingReadPages !== undefined ? incomingReadPages : (existing?.totalReadPages ?? 0)
@@ -342,6 +339,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					incomingReadTime !== undefined ? incomingReadTime : (existing?.totalReadTime ?? 0)
 				),
 				status: bookStatus,
+				statusLocked: statusLocked || undefined,
 				startedAt: bookStartedAt,
 				lastReadAt: metadata.last_open
 					? new Date(Number(metadata.last_open) * 1000).toISOString()

@@ -85,9 +85,14 @@ export const PATCH: RequestHandler = async ({ request }) => {
 				if (body.finishedAt !== undefined) book.finishedAt = body.finishedAt ? String(body.finishedAt) : undefined;
 				if (body.status && ['reading', 'finished', 'paused'].includes(body.status)) {
 					book.status = body.status;
+					book.statusLocked = true;
 					if (body.status === 'finished') {
 						// ditandai selesai secara manual: catat tanggal tamat bila belum ada
 						if (body.finishedAt === undefined && !book.finishedAt) book.finishedAt = new Date().toISOString();
+						if (book.totalPages > 0) book.currentPage = book.totalPages;
+						if (book.totalPages > 0) {
+							book.progress = Math.min(100, Math.round((book.currentPage / book.totalPages) * 100));
+						}
 					} else if (body.finishedAt === undefined) {
 						// dibatalkan: hapus tanggal tamat
 						book.finishedAt = undefined;
