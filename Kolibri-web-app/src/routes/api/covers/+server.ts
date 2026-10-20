@@ -4,7 +4,7 @@ import { isAuthenticated } from '../../../lib/server/auth';
 import { readLibrary, updateLibrary } from '../../../lib/server/library';
 import type { RequestHandler } from './$types';
 
-export type CoverResult = {
+type CoverResult = {
 	title: string;
 	author: string;
 	url: string;
@@ -116,7 +116,7 @@ async function searchGoogleBooks(query: string, limit = 6): Promise<CoverResult[
 }
 
 /** Cari sampul dari Open Library + Google Books, digabung & di-dedupe. */
-export async function searchCovers(query: string, limitPerSource = 6): Promise<CoverResult[]> {
+async function searchCovers(query: string, limitPerSource = 6): Promise<CoverResult[]> {
 	const cleaned = cleanSearchQuery(query) || query;
 	const [openLibrary, googleBooks] = await Promise.all([
 		searchOpenLibrary(cleaned, limitPerSource),
